@@ -1,9 +1,28 @@
 import Link from "next/link";
 import { Suspense } from "react";
 
-async function RepoTitle({ params }: { params: Promise<{ id: string }> }) {
+import { ApiError, getRepo } from "@/lib/api";
+
+async function RepoHeader({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <>Repository {id}</>;
+  const repo = await getRepo(id).catch((e: unknown) => {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  });
+  if (!repo) return <>Repository not found</>;
+  return (
+    <div className="flex flex-col">
+      <span>
+        {repo.owner}/{repo.name}
+      </span>
+      {repo.sha && (
+        <span className="font-mono text-xs font-normal text-neutral-500">
+          {repo.sha.slice(0, 7)}
+          {repo.status !== "ready" && ` (${repo.status})`}
+        </span>
+      )}
+    </div>
+  );
 }
 
 export default function ChatPage(props: PageProps<"/repos/[id]">) {
@@ -12,7 +31,7 @@ export default function ChatPage(props: PageProps<"/repos/[id]">) {
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">
           <Suspense fallback="Repository">
-            <RepoTitle params={props.params} />
+            <RepoHeader params={props.params} />
           </Suspense>
         </h1>
         <Link href="/" className="text-sm text-neutral-500 hover:underline">

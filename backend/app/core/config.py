@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     max_source_files: int = 5000
     max_clone_mb: int = 200
     ingest_timeout_s: int = 900
+    max_file_kb: int = 512
+    max_concurrent_ingests: int = 2
 
 
 @lru_cache

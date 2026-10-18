@@ -64,7 +64,9 @@ Frontend on http://localhost:3000:
 cd frontend && npm run dev
 ```
 
-The Ingest page shows a backend status panel that confirms the API, database and pgvector are reachable.
+On the Ingest page, paste a public GitHub URL (or `owner/repo`). The backend shallow clones it into `data/repos/`, walks the files and extracts Python, JavaScript and TypeScript symbols with tree-sitter. The page polls until the repo is `ready` and shows file, test and symbol counts. A backend status panel confirms the API, database and pgvector are reachable.
+
+tree-sitter grammars are downloaded on first use and cached, so the first ingest needs network access.
 
 ## Run with Docker (optional)
 
