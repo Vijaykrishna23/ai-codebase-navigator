@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     embedding_model: str = "voyage-code-4"
     embedding_dim: int = 1024
 
+    rg_path: str = ""
+    baseline_top_k: int = 12
+
     max_source_files: int = 5000
     max_clone_mb: int = 200
     ingest_timeout_s: int = 900

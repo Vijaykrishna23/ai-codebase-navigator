@@ -7,6 +7,7 @@ import {
   ACTIVE_STATUSES,
   createRepo,
   deleteRepo,
+  embedRepo,
   listRepos,
   reindexRepo,
   type Repo,
@@ -19,6 +20,7 @@ const STAGES: { status: RepoStatus; label: string }[] = [
   { status: "queued", label: "Queued" },
   { status: "cloning", label: "Cloning" },
   { status: "parsing", label: "Parsing" },
+  { status: "embedding", label: "Embedding" },
   { status: "ready", label: "Ready" },
 ];
 
@@ -129,6 +131,7 @@ export function RepoIngest() {
               key={repo.id}
               repo={repo}
               onReindex={() => act(() => reindexRepo(repo.id))}
+              onEmbed={() => act(() => embedRepo(repo.id))}
               onDelete={() => {
                 if (confirm(`Remove ${repo.owner}/${repo.name} and its index?`)) {
                   act(() => deleteRepo(repo.id));
@@ -146,16 +149,22 @@ export function RepoIngest() {
 function RepoCard({
   repo,
   onReindex,
+  onEmbed,
   onDelete,
   onRetry,
 }: {
   repo: Repo;
   onReindex: () => void;
+  onEmbed: () => void;
   onDelete: () => void;
   onRetry: () => void;
 }) {
   const active = ACTIVE_STATUSES.includes(repo.status);
   const { stats } = repo;
+  const canEmbed =
+    repo.status === "ready" &&
+    stats.chunks !== undefined &&
+    (stats.embedded ?? 0) < stats.chunks;
 
   return (
     <li className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4 dark:border-neutral-800">
@@ -192,11 +201,27 @@ function RepoCard({
         <p className="text-sm text-red-600">{repo.error}</p>
       )}
 
+      {repo.status === "ready" && stats.chunks === undefined && (
+        <p className="text-sm text-amber-700 dark:text-amber-400">
+          Indexed before search chunks existed. Re-index to enable semantic search.
+        </p>
+      )}
+
+      {repo.status === "ready" && stats.embedding_note && (
+        <p className="text-sm text-amber-700 dark:text-amber-400">
+          Embedding {stats.embedding}: {stats.embedding_note}
+        </p>
+      )}
+
       {repo.status === "ready" && (
         <dl className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
           <Stat label="Source files" value={stats.source_files} />
           <Stat label="Tests" value={stats.test_files} />
           <Stat label="Symbols" value={stats.symbols} />
+          <Stat label="Chunks" value={stats.chunks} />
+          {stats.chunks !== undefined && (
+            <Stat label="Embedded" value={`${stats.embedded ?? 0}/${stats.chunks}`} />
+          )}
           <Stat
             label="Languages"
             value={Object.keys(stats.languages ?? {})
@@ -223,6 +248,11 @@ function RepoCard({
             Retry
           </button>
         )}
+        {canEmbed && (
+          <button onClick={onEmbed} className="text-neutral-700 hover:underline dark:text-neutral-300">
+            Embed
+          </button>
+        )}
         {repo.status === "ready" && (
           <button onClick={onReindex} className="text-neutral-500 hover:underline">
             Re-index
@@ -241,6 +271,7 @@ function StatusBadge({ status }: { status: RepoStatus }) {
     queued: "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300",
     cloning: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
     parsing: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
+    embedding: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
     ready: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
     failed: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
   };
@@ -253,8 +284,13 @@ function StatusBadge({ status }: { status: RepoStatus }) {
 
 function Progress({ repo }: { repo: Repo }) {
   const current = STAGES.findIndex((s) => s.status === repo.status);
-  const { parsed = 0, source_files: total } = repo.stats;
-  const pct = repo.status === "parsing" && total ? Math.round((parsed / total) * 100) : null;
+  const { parsed = 0, source_files, embedded = 0, chunks } = repo.stats;
+  const [done, total, unit] =
+    repo.status === "embedding" ? [embedded, chunks, "chunks"] : [parsed, source_files, "files"];
+  const pct =
+    (repo.status === "parsing" || repo.status === "embedding") && total
+      ? Math.round((done / total) * 100)
+      : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -281,7 +317,7 @@ function Progress({ repo }: { repo: Repo }) {
             <div className="h-full bg-blue-600 transition-all" style={{ width: `${pct}%` }} />
           </div>
           <span className="font-mono">
-            {parsed}/{total} files
+            {done}/{total} {unit}
           </span>
         </div>
       )}

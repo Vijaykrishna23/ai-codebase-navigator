@@ -6,9 +6,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import get_session
 from app.ingest.github import parse_github_url
-from app.ingest.pipeline import delete_repo_data, find_repo, start_ingest
+from app.ingest.pipeline import delete_repo_data, find_repo, start_embed, start_ingest
 from app.models import Repo, RepoStatus
 
 router = APIRouter(prefix="/repos", tags=["repos"])
@@ -95,6 +96,29 @@ async def reindex_repo(repo_id: int, session: Session) -> RepoOut:
     await session.commit()
     await session.refresh(repo)
     start_ingest(repo.id)
+    return RepoOut.of(repo)
+
+
+@router.post("/{repo_id}/embed", status_code=status.HTTP_202_ACCEPTED)
+async def embed_repo(repo_id: int, session: Session) -> RepoOut:
+    """Embed chunks that have no vector yet, e.g. after adding VOYAGE_API_KEY."""
+    repo = await _get(session, repo_id)
+    if repo.status != RepoStatus.READY:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Repository is {repo.status}")
+    if "chunks" not in repo.stats:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This repository was indexed before chunking existed. Re-index it instead.",
+        )
+    if not get_settings().voyage_api_key:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "VOYAGE_API_KEY is not set. Add it to .env and restart the backend.",
+        )
+    repo.status = RepoStatus.EMBEDDING
+    await session.commit()
+    await session.refresh(repo)
+    start_embed(repo.id)
     return RepoOut.of(repo)
 
 

@@ -26,6 +26,7 @@ export function BackendStatus() {
     ["pgvector", health.pgvector ?? "not installed"],
     ["LLM", `${health.llm_model} (${health.llm_key_set ? "key set" : "no key"})`],
     ["Embeddings", `${health.embedding_model} (${health.embedding_key_set ? "key set" : "no key"})`],
+    ["ripgrep", health.ripgrep ? "found" : "not installed (brew install ripgrep)"],
   ];
 
   return (

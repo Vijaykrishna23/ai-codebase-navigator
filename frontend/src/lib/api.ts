@@ -8,9 +8,10 @@ export type Health = {
   llm_key_set: boolean;
   embedding_model: string;
   embedding_key_set: boolean;
+  ripgrep: boolean;
 };
 
-export type RepoStatus = "queued" | "cloning" | "parsing" | "ready" | "failed";
+export type RepoStatus = "queued" | "cloning" | "parsing" | "embedding" | "ready" | "failed";
 
 export type RepoStats = {
   clone_mb?: number;
@@ -21,6 +22,11 @@ export type RepoStats = {
   parsed?: number;
   symbols?: number;
   parse_errors?: number;
+  chunks?: number;
+  embedded?: number;
+  embedding?: "skipped" | "running" | "done" | "failed";
+  embedding_note?: string | null;
+  embedding_model?: string;
   duration_s?: number;
 };
 
@@ -39,7 +45,7 @@ export type Repo = {
   indexed_at: string | null;
 };
 
-export const ACTIVE_STATUSES: RepoStatus[] = ["queued", "cloning", "parsing"];
+export const ACTIVE_STATUSES: RepoStatus[] = ["queued", "cloning", "parsing", "embedding"];
 
 export class ApiError extends Error {
   constructor(
@@ -86,4 +92,126 @@ export function reindexRepo(id: number): Promise<Repo> {
 
 export function deleteRepo(id: number): Promise<void> {
   return request(`/api/repos/${id}`, { method: "DELETE" });
+}
+
+export function embedRepo(id: number): Promise<Repo> {
+  return request(`/api/repos/${id}/embed`, { method: "POST" });
+}
+
+export type TextMatch = {
+  path: string;
+  line: number;
+  text: string;
+  ranges: [number, number][];
+  url: string;
+};
+
+export type TextSearchResult = { matches: TextMatch[]; truncated: boolean };
+
+export type SymbolHit = {
+  id: number;
+  kind: string;
+  name: string;
+  qualified_name: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  signature: string | null;
+  docstring: string | null;
+  is_test: boolean;
+  url: string;
+};
+
+export type ChunkHit = {
+  id: number;
+  kind: string;
+  path: string;
+  symbol: string | null;
+  start_line: number;
+  end_line: number;
+  content: string;
+  score: number;
+  is_test: boolean;
+  url: string;
+};
+
+export type TextSearchOptions = {
+  regex?: boolean;
+  case?: "smart" | "sensitive" | "insensitive";
+  glob?: string;
+};
+
+function query(params: Record<string, string | number | boolean | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") q.set(k, String(v));
+  }
+  return q.toString();
+}
+
+export function searchText(
+  repoId: number,
+  q: string,
+  opts: TextSearchOptions = {},
+): Promise<TextSearchResult> {
+  return request(`/api/repos/${repoId}/search/text?${query({ q, ...opts })}`);
+}
+
+export function searchSymbols(repoId: number, q: string, kind?: string): Promise<SymbolHit[]> {
+  return request(`/api/repos/${repoId}/search/symbols?${query({ q, kind })}`);
+}
+
+export function searchSemantic(repoId: number, q: string, k = 10): Promise<ChunkHit[]> {
+  return request(`/api/repos/${repoId}/search/semantic?${query({ q, k })}`);
+}
+
+export type AskMode = "baseline" | "navigator";
+
+export type Evidence = {
+  id: string;
+  path: string;
+  symbol: string | null;
+  start_line: number;
+  end_line: number;
+  url: string;
+  content: string;
+  score: number | null;
+  is_test: boolean;
+};
+
+export type AnswerSentence = {
+  text: string;
+  kind: "fact" | "interpretation";
+  evidence: string[];
+  downgraded: boolean;
+};
+
+export type AnswerReference = {
+  path: string;
+  symbol: string | null;
+  start_line: number;
+  end_line: number;
+  url: string;
+  evidence: string;
+  note: string;
+  is_test: boolean;
+};
+
+export type Answer = {
+  mode: AskMode;
+  question: string;
+  summary: string;
+  explanation: AnswerSentence[];
+  references: AnswerReference[];
+  tests: AnswerReference[];
+  gaps: string[];
+  evidence: Evidence[];
+  usage: { model: string; input_tokens: number; output_tokens: number; latency_ms: number };
+};
+
+export function ask(repoId: number, question: string, mode: AskMode): Promise<Answer> {
+  return request(`/api/repos/${repoId}/ask`, {
+    method: "POST",
+    body: JSON.stringify({ question, mode }),
+  });
 }

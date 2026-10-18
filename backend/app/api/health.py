@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_session
+from app.search.text import rg_path
 
 router = APIRouter(tags=["health"])
 
@@ -34,4 +35,5 @@ async def health(session: Annotated[AsyncSession, Depends(get_session)]) -> dict
         "llm_key_set": bool(settings.anthropic_api_key),
         "embedding_model": settings.embedding_model,
         "embedding_key_set": bool(settings.voyage_api_key),
+        "ripgrep": rg_path() is not None,
     }

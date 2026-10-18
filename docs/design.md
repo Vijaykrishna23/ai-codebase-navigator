@@ -78,7 +78,7 @@ FastAPI (Python 3.13, uv)
 7. **Embed** chunks in batches.
 8. **Summarize** (cheap, optional for v1): short per-file summaries plus a repo overview built from README, top-level layout and entry points. Used by "what does this repo do" questions.
 
-Index status: `queued -> cloning -> parsing -> embedding -> ready | failed`.
+Index status: `queued -> cloning -> parsing -> embedding -> ready | failed`. Without `VOYAGE_API_KEY` the embedding step is skipped (recorded in repo stats) and the repo is still `ready` for text and symbol search.
 
 ## 6. Code intelligence
 
@@ -156,6 +156,12 @@ Same UI and answer rendering, but the pipeline is: embed the question, take top-
 | GET | `/api/repos` | List indexed repos |
 | GET | `/api/repos/{id}` | Status, SHA, languages, counts |
 | DELETE | `/api/repos/{id}` | Remove a repo and its index |
+| POST | `/api/repos/{id}/reindex` | Clone the latest head and rebuild the index |
+| POST | `/api/repos/{id}/embed` | Embed chunks that have no vector yet (after adding `VOYAGE_API_KEY`) |
+| GET | `/api/repos/{id}/search/text` | `q`, `regex`, `case`, `glob`: ripgrep over the checkout |
+| GET | `/api/repos/{id}/search/symbols` | `q`, `kind`: symbols by name or qualified name |
+| GET | `/api/repos/{id}/search/semantic` | `q`, `k`: embedding search over chunks |
+| POST | `/api/repos/{id}/ask` | Body `{question, mode}`. Non-streaming answer; baseline only until conversations and SSE land in milestone 5 |
 | POST | `/api/repos/{id}/conversations` | Start a conversation |
 | POST | `/api/conversations/{cid}/messages` | Body `{question, mode: "navigator" or "baseline"}`. SSE stream of `step`, `answer`, `error` events |
 | GET | `/api/conversations/{cid}` | History with answers |

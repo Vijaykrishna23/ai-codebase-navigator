@@ -3,6 +3,7 @@ import logging
 import shutil
 import time
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from sqlalchemy import delete, func, insert, select, text, update
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.ingest.chunk import ParsedChunk, chunk_doc, chunk_source, is_doc_path
+from app.ingest.embed import embed_repo, get_embedder
 from app.ingest.github import (
     IngestError,
     RepoRef,
@@ -18,9 +21,9 @@ from app.ingest.github import (
     fetch_meta,
     shallow_clone,
 )
-from app.ingest.parse import parse_source
+from app.ingest.parse import ParsedFile, parse_source
 from app.ingest.walk import WalkedFile, walk_repo
-from app.models import File, Repo, RepoStatus, Symbol
+from app.models import Chunk, File, Repo, RepoStatus, Symbol
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +42,16 @@ def clone_dir(owner: str, name: str, sha: str) -> Path:
 
 
 def start_ingest(repo_id: int) -> None:
-    task = asyncio.create_task(_run(repo_id))
+    _start(repo_id, _ingest)
+
+
+def start_embed(repo_id: int) -> None:
+    """Embed the chunks of an indexed repo that have no vector yet."""
+    _start(repo_id, _embed_only)
+
+
+def _start(repo_id: int, job: Callable[[int], Awaitable[None]]) -> None:
+    task = asyncio.create_task(_run(repo_id, job))
     _tasks[repo_id] = task
     task.add_done_callback(lambda _: _tasks.pop(repo_id, None))
 
@@ -73,14 +85,14 @@ async def _update(repo_id: int, **values: Any) -> None:
         await session.commit()
 
 
-async def _run(repo_id: int) -> None:
+async def _run(repo_id: int, job: Callable[[int], Awaitable[None]]) -> None:
     global _semaphore
     settings = get_settings()
     if _semaphore is None:
         _semaphore = asyncio.Semaphore(settings.max_concurrent_ingests)
     async with _semaphore:
         try:
-            await asyncio.wait_for(_ingest(repo_id), settings.ingest_timeout_s)
+            await asyncio.wait_for(job(repo_id), settings.ingest_timeout_s)
         except IngestError as exc:
             await _fail(repo_id, str(exc))
         except TimeoutError:
@@ -163,17 +175,22 @@ async def _ingest(repo_id: int) -> None:
         "parsed": 0,
         "symbols": 0,
         "parse_errors": 0,
+        "chunks": 0,
+        "embedded": 0,
     }
     await _update(repo_id, stats=stats)
 
     for start in range(0, len(files), BATCH_FILES):
         batch = files[start : start + BATCH_FILES]
         parsed = await asyncio.to_thread(_parse_batch, batch)
-        n_symbols, n_errors = await _store_batch(repo_id, parsed)
+        n_symbols, n_errors, n_chunks = await _store_batch(repo_id, parsed)
         stats["parsed"] += sum(1 for f in batch if f.language)
         stats["symbols"] += n_symbols
         stats["parse_errors"] += n_errors
+        stats["chunks"] += n_chunks
         await _update(repo_id, stats=dict(stats))
+
+    await _embed_stage(repo_id, stats)
 
     stats["duration_s"] = round(time.monotonic() - started, 1)
     await _update(
@@ -184,13 +201,22 @@ async def _ingest(repo_id: int) -> None:
     )
 
 
-def _parse_batch(batch: list[WalkedFile]) -> list[tuple[WalkedFile, int, Any]]:
+Parsed = tuple[WalkedFile, int, ParsedFile | None, list[ParsedChunk]]
+
+
+def _parse_batch(batch: list[WalkedFile]) -> list[Parsed]:
     out = []
     for f in batch:
         src = f.abs_path.read_bytes()
         loc = src.count(b"\n") + (0 if src.endswith(b"\n") else 1)
         parsed = parse_source(f.path, f.language, src) if f.language else None
-        out.append((f, loc, parsed))
+        if parsed is not None:
+            chunks = chunk_source(src, parsed)
+        elif is_doc_path(f.path):
+            chunks = chunk_doc(src)
+        else:
+            chunks = []
+        out.append((f, loc, parsed, chunks))
     return out
 
 
@@ -207,15 +233,16 @@ async def _next_ids(session, table: str, n: int) -> list[int]:
     return list(result.scalars())
 
 
-async def _store_batch(repo_id: int, parsed: list) -> tuple[int, int]:
+async def _store_batch(repo_id: int, parsed: list[Parsed]) -> tuple[int, int, int]:
     async with SessionLocal() as session:
         file_ids = await _next_ids(session, "files", len(parsed))
         file_rows = []
         symbol_rows = []
-        n_symbols = sum(len(p.symbols) for _, _, p in parsed if p)
+        chunk_rows = []
+        n_symbols = sum(len(p.symbols) for _, _, p, _ in parsed if p)
         symbol_ids = iter(await _next_ids(session, "symbols", n_symbols))
         n_errors = 0
-        for file_id, (f, loc, p) in zip(file_ids, parsed, strict=True):
+        for file_id, (f, loc, p, chunks) in zip(file_ids, parsed, strict=True):
             file_rows.append(
                 {
                     "id": file_id,
@@ -228,10 +255,22 @@ async def _store_batch(repo_id: int, parsed: list) -> tuple[int, int]:
                     "parse_error": bool(p and p.has_error),
                 }
             )
+            ids = [next(symbol_ids) for _ in p.symbols] if p else []
+            chunk_rows.extend(
+                {
+                    "repo_id": repo_id,
+                    "file_id": file_id,
+                    "symbol_id": ids[c.symbol] if c.symbol is not None else None,
+                    "kind": c.kind,
+                    "start_line": c.start_line,
+                    "end_line": c.end_line,
+                    "content": c.content,
+                }
+                for c in chunks
+            )
             if p is None:
                 continue
             n_errors += p.has_error
-            ids = [next(symbol_ids) for _ in p.symbols]
             for sid, s in zip(ids, p.symbols, strict=True):
                 symbol_rows.append(
                     {
@@ -251,8 +290,65 @@ async def _store_batch(repo_id: int, parsed: list) -> tuple[int, int]:
         await session.execute(insert(File), file_rows)
         if symbol_rows:
             await session.execute(insert(Symbol), symbol_rows)
+        if chunk_rows:
+            await session.execute(insert(Chunk), chunk_rows)
         await session.commit()
-    return n_symbols, n_errors
+    return n_symbols, n_errors, len(chunk_rows)
+
+
+async def _embed_stage(repo_id: int, stats: dict[str, Any]) -> None:
+    """Embed missing chunk vectors. Never fails the ingest: search without
+    embeddings still works, and embedding can be retried later."""
+    embedder = get_embedder()
+    if embedder is None:
+        stats["embedding"] = "skipped"
+        stats["embedding_note"] = (
+            "VOYAGE_API_KEY is not set. Add it to .env, restart the backend, "
+            "then run Embed."
+        )
+        return
+
+    async with SessionLocal() as session:
+        base = (
+            await session.execute(
+                select(func.count())
+                .select_from(Chunk)
+                .where(Chunk.repo_id == repo_id, Chunk.embedding.is_not(None))
+            )
+        ).scalar_one()
+    stats.update(
+        embedding="running",
+        embedding_model=embedder.model,
+        embedding_note=None,
+        embedded=base,
+    )
+    await _update(repo_id, status=RepoStatus.EMBEDDING, stats=dict(stats))
+    tokens_before = stats.get("embedding_tokens", 0)
+
+    async def progress(done: int, tokens: int) -> None:
+        stats["embedded"] = base + done
+        stats["embedding_tokens"] = tokens_before + tokens
+        await _update(repo_id, stats=dict(stats))
+
+    try:
+        await embed_repo(repo_id, embedder, progress)
+        stats["embedding"] = "done"
+    except Exception as exc:
+        log.exception("Embedding repo %s failed", repo_id)
+        stats["embedding"] = "failed"
+        stats["embedding_note"] = f"{exc.__class__.__name__}: {exc}"
+
+
+async def _embed_only(repo_id: int) -> None:
+    async with SessionLocal() as session:
+        repo = await session.get(Repo, repo_id)
+        if repo is None:
+            return
+        stats = dict(repo.stats)
+    started = time.monotonic()
+    await _embed_stage(repo_id, stats)
+    stats["embedding_duration_s"] = round(time.monotonic() - started, 1)
+    await _update(repo_id, status=RepoStatus.READY, stats=stats)
 
 
 async def delete_repo_data(repo: Repo) -> None:

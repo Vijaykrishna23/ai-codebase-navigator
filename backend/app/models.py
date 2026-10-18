@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -16,6 +17,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.core.config import get_settings
+
 
 class Base(DeclarativeBase):
     pass
@@ -25,10 +28,11 @@ class RepoStatus:
     QUEUED = "queued"
     CLONING = "cloning"
     PARSING = "parsing"
+    EMBEDDING = "embedding"
     READY = "ready"
     FAILED = "failed"
 
-    ACTIVE = (QUEUED, CLONING, PARSING)
+    ACTIVE = (QUEUED, CLONING, PARSING, EMBEDDING)
 
 
 class Repo(Base):
@@ -89,3 +93,25 @@ class Symbol(Base):
     end_line: Mapped[int] = mapped_column(Integer)
     signature: Mapped[str | None] = mapped_column(Text)
     docstring: Mapped[str | None] = mapped_column(Text)
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    __table_args__ = (
+        Index("ix_chunks_repo", "repo_id"),
+        Index("ix_chunks_file", "file_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id", ondelete="CASCADE"))
+    file_id: Mapped[int] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"))
+    symbol_id: Mapped[int | None] = mapped_column(
+        ForeignKey("symbols.id", ondelete="CASCADE")
+    )
+    kind: Mapped[str] = mapped_column(String(20))
+    start_line: Mapped[int] = mapped_column(Integer)
+    end_line: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(get_settings().embedding_dim)
+    )
