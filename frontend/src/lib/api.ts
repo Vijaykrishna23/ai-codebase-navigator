@@ -27,6 +27,10 @@ export type RepoStats = {
   embedding?: "skipped" | "running" | "done" | "failed";
   embedding_note?: string | null;
   embedding_model?: string;
+  edges?: number;
+  edge_kinds?: Record<string, number>;
+  linking?: "queued" | "running" | "done" | "failed";
+  linking_note?: string | null;
   duration_s?: number;
 };
 

@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.db import get_session
 from app.ingest.github import parse_github_url
-from app.ingest.pipeline import delete_repo_data, find_repo, start_embed, start_ingest
+from app.ingest.pipeline import (
+    delete_repo_data,
+    find_repo,
+    start_embed,
+    start_ingest,
+    start_link,
+)
 from app.models import Repo, RepoStatus
 
 router = APIRouter(prefix="/repos", tags=["repos"])
@@ -119,6 +125,20 @@ async def embed_repo(repo_id: int, session: Session) -> RepoOut:
     await session.commit()
     await session.refresh(repo)
     start_embed(repo.id)
+    return RepoOut.of(repo)
+
+
+@router.post("/{repo_id}/relink", status_code=status.HTTP_202_ACCEPTED)
+async def relink_repo(repo_id: int, session: Session) -> RepoOut:
+    """Rebuild call, import, reference, inheritance and test edges from the
+    checkout, without re-cloning or re-embedding."""
+    repo = await _get(session, repo_id)
+    if repo.status != RepoStatus.READY:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Repository is {repo.status}")
+    repo.stats = {**repo.stats, "linking": "queued", "linking_note": None}
+    await session.commit()
+    await session.refresh(repo)
+    start_link(repo.id)
     return RepoOut.of(repo)
 
 

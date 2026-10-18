@@ -84,10 +84,13 @@ Index status: `queued -> cloning -> parsing -> embedding -> ready | failed`. Wit
 
 Static resolution with tree-sitter is heuristic, so every edge carries a **confidence**:
 
-- **Imports**: resolve Python module paths and JS/TS relative paths and `tsconfig` path aliases to files in the repo. External packages are recorded but not followed.
-- **Calls**: for each call site, try in order: a local or imported name bound in the same file (high), `self.method` / `this.method` within the class (high), a unique symbol name across the repo (medium), several candidates (low, all kept). Dynamic dispatch and callbacks are not resolved.
-- **References**: resolved call and import edges, plus ripgrep identifier matches as low-confidence fallback.
-- **Tests**: files matching test conventions (`test_*.py`, `*_test.py`, `*.test.ts`, `*.spec.js`, `tests/`, `__tests__/`) linked to code via imports and calls from test functions, plus name matching.
+- **Imports**: resolve Python module paths (relative and absolute, `src/` layouts, a unique module suffix at medium) and JS/TS relative paths, `tsconfig`/`jsconfig` `paths` and `baseUrl` (following `extends`), and workspace package names from `package.json` (medium) to files in the repo. Re-exports (`export ... from`, `export *`, `module.exports = require(...)`, Python `__init__` imports) are followed to the defining symbol. External packages are recorded with no destination but not followed.
+- **Calls**: for each call site (calls, `new X()`, JSX `<Component />`), try in order: a name defined in an enclosing scope or imported into the file (high); `self.method` / `this.method` / `super().method` within the class and its resolved bases (high); a receiver whose class is known from a parameter or variable annotation (high) or a `x = Foo()` / `new Foo()` assignment (medium); a unique top-level name across the repo (medium) or 2 to 5 candidates (low, all kept); a method name on an unknown receiver with 1 to 3 candidates (low; common builtin names such as `get` or `push` are skipped). Name guesses never cross into tests, examples or docs from application code. Calls through an imported external name are kept as external edges (`jwt.decode`). Dynamic dispatch and callbacks are not resolved.
+- **References**: non-call uses of names bound in the file (a function passed as a callback, a type annotation), stored as `references` edges. The references query combines them with call, import and inheritance edges, plus ripgrep identifier matches not explained by an edge (low).
+- **Inherits**: base classes, TypeScript `implements` and interface `extends`, resolved like calls.
+- **Tests**: files matching test conventions (`test_*.py`, `*_test.py`, `*.test.ts`, `*.spec.js`, `tests/`, `__tests__/`) link to code through their high and medium calls and references; JS tests carry the enclosing `it()` / `test()` title. A test file also links to source files with the same base name (`test_auth.py`, `auth.test.ts` to `auth.py`, `auth.ts`).
+
+Edges are built at ingest after parsing, in the `parsing` stage, and never fail an ingest. `POST /api/repos/{id}/relink` rebuilds them from the checkout without re-cloning or re-embedding, for when only the resolver changed. Known gaps: module-level values that are not functions or classes (`export const ky = createInstance()`) are not symbols, so calls through them do not resolve; untyped receivers (`res.send()` in an Express handler) mostly stay unresolved.
 
 The agent sees confidence values and is instructed to state uncertainty when it relies on medium or low edges. If heuristic resolution proves too weak in evaluation, the upgrade path is SCIP indexers (`scip-python`, `scip-typescript`) behind the same tool interfaces.
 
@@ -158,9 +161,18 @@ Same UI and answer rendering, but the pipeline is: embed the question, take top-
 | DELETE | `/api/repos/{id}` | Remove a repo and its index |
 | POST | `/api/repos/{id}/reindex` | Clone the latest head and rebuild the index |
 | POST | `/api/repos/{id}/embed` | Embed chunks that have no vector yet (after adding `VOYAGE_API_KEY`) |
+| POST | `/api/repos/{id}/relink` | Rebuild code-intelligence edges from the checkout |
 | GET | `/api/repos/{id}/search/text` | `q`, `regex`, `case`, `glob`: ripgrep over the checkout |
 | GET | `/api/repos/{id}/search/symbols` | `q`, `kind`: symbols by name or qualified name |
 | GET | `/api/repos/{id}/search/semantic` | `q`, `k`: embedding search over chunks |
+| GET | `/api/repos/{id}/intel/definition` | `symbol` (name or qualified name) or `id`: location and source |
+| GET | `/api/repos/{id}/intel/callers` | `symbol` or `id`, `min_confidence`: call sites of the symbol |
+| GET | `/api/repos/{id}/intel/callees` | `symbol` or `id`, `min_confidence`: what the symbol calls, incl. external |
+| GET | `/api/repos/{id}/intel/references` | `symbol` or `id`, `text`: resolved usages plus identifier text matches |
+| GET | `/api/repos/{id}/intel/imports` | `path`: modules the file imports |
+| GET | `/api/repos/{id}/intel/importers` | `path`: files importing the file or its names |
+| GET | `/api/repos/{id}/intel/tests` | `symbol`, `id` or `path`: tests that exercise the target |
+| GET | `/api/repos/{id}/intel/hierarchy` | `symbol` or `id`: base classes and subclasses |
 | POST | `/api/repos/{id}/ask` | Body `{question, mode}`. Non-streaming answer; baseline only until conversations and SSE land in milestone 5 |
 | POST | `/api/repos/{id}/conversations` | Start a conversation |
 | POST | `/api/conversations/{cid}/messages` | Body `{question, mode: "navigator" or "baseline"}`. SSE stream of `step`, `answer`, `error` events |
@@ -171,7 +183,7 @@ Same UI and answer rendering, but the pipeline is: embed the question, take top-
 - `repos`: id, owner, name, url, sha, status, error, stats, created_at
 - `files`: id, repo_id, path, language, loc, is_test, summary
 - `symbols`: id, file_id, kind, name, qualified_name, parent_id, start_line, end_line, signature, docstring
-- `edges`: id, repo_id, kind (`imports`, `calls`, `inherits`, `tests`), src_symbol_id or src_file_id, dst_symbol_id or dst_file_id, dst_name, line, confidence
+- `edges`: id, repo_id, kind (`imports`, `calls`, `references`, `inherits`, `tests`), src_file_id, src_symbol_id, src_name (a JS test title, `implements`), dst_file_id, dst_symbol_id (both null for external packages), dst_name (raw target text), line, confidence (`high`, `medium`, `low`)
 - `chunks`: id, file_id, symbol_id, start_line, end_line, content; embedding `vector(N)` with N set by the embedding model (pgvector, HNSW index)
 - `conversations`, `messages`: messages store mode, structured answer JSON, evidence ledger and tool trace
 

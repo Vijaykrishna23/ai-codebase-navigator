@@ -7,6 +7,8 @@ from pathlib import PurePosixPath
 from tree_sitter import Node, Parser
 from tree_sitter_language_pack import get_parser
 
+from app.ingest.facts import Facts, extract_facts
+
 MAX_DOCSTRING = 2000
 MAX_SIGNATURE = 300
 
@@ -24,12 +26,14 @@ class ParsedSymbol:
     end_line: int
     signature: str | None = None
     docstring: str | None = None
+    span: tuple[int, int] = (0, 0)  # byte range of the defining node
 
 
 @dataclass
 class ParsedFile:
     symbols: list[ParsedSymbol] = field(default_factory=list)
     has_error: bool = False
+    facts: Facts = field(default_factory=Facts)
 
 
 def _parser(language: str) -> Parser:
@@ -111,6 +115,7 @@ class _Builder:
                 end_line=node.end_point.row + 1,
                 signature=signature,
                 docstring=docstring,
+                span=(node.start_byte, node.end_byte),
             )
         )
         return len(self.symbols) - 1
@@ -182,6 +187,41 @@ _TS_TYPE_DECLS = {
     "enum_declaration": "enum",
 }
 _JS_WRAPPERS = {"export_statement", "lexical_declaration", "variable_declaration"}
+_JS_VALUE_WRAPPERS = {
+    "as_expression",
+    "satisfies_expression",
+    "parenthesized_expression",
+    "non_null_expression",
+}
+_JS_FUNCTION_WRAPPERS = {
+    "memo",
+    "forwardRef",
+    "React.memo",
+    "React.forwardRef",
+    "observer",
+    "useCallback",
+}
+
+
+def _js_unwrap(value: Node | None) -> Node | None:
+    """`(() => {}) as Foo` and `memo(function Foo() {})` define functions too."""
+    for _ in range(4):
+        if value is None:
+            break
+        if value.type in _JS_VALUE_WRAPPERS and value.named_children:
+            value = value.named_children[0]
+        elif (
+            value.type == "call_expression"
+            and _text(value.child_by_field_name("function")) in _JS_FUNCTION_WRAPPERS
+        ):
+            args = value.child_by_field_name("arguments")
+            first = args.named_children[0] if args and args.named_children else None
+            if first is None or first.type not in _JS_FUNCTION_VALUES:
+                break
+            value = first
+        else:
+            break
+    return value
 
 
 def _jsdoc(node: Node) -> str | None:
@@ -277,7 +317,7 @@ def _parse_js(b_args: dict, src: bytes, root: Node) -> _Builder:
                 )
         elif t == "variable_declarator":
             name = node.child_by_field_name("name")
-            value = node.child_by_field_name("value")
+            value = _js_unwrap(node.child_by_field_name("value"))
             if name is not None and name.type == "identifier" and value is not None:
                 if value.type in _JS_FUNCTION_VALUES:
                     body = value.child_by_field_name("body")
@@ -359,4 +399,7 @@ def parse_source(path: str, language: str, src: bytes) -> ParsedFile:
         b = _parse_python(args, src, tree.root_node)
     else:
         b = _parse_js(args, src, tree.root_node)
-    return ParsedFile(symbols=b.symbols, has_error=tree.root_node.has_error)
+    facts = extract_facts(path, language, tree.root_node, b.symbols)
+    return ParsedFile(
+        symbols=b.symbols, has_error=tree.root_node.has_error, facts=facts
+    )

@@ -207,6 +207,18 @@ function RepoCard({
         </p>
       )}
 
+      {repo.status === "ready" && stats.chunks !== undefined && stats.edges === undefined && !stats.linking && (
+        <p className="text-sm text-amber-700 dark:text-amber-400">
+          Indexed before code intelligence existed. Re-index to build call, import and test links.
+        </p>
+      )}
+
+      {repo.status === "ready" && stats.linking === "failed" && stats.linking_note && (
+        <p className="text-sm text-amber-700 dark:text-amber-400">
+          Linking failed: {stats.linking_note}
+        </p>
+      )}
+
       {repo.status === "ready" && stats.embedding_note && (
         <p className="text-sm text-amber-700 dark:text-amber-400">
           Embedding {stats.embedding}: {stats.embedding_note}
@@ -219,6 +231,7 @@ function RepoCard({
           <Stat label="Tests" value={stats.test_files} />
           <Stat label="Symbols" value={stats.symbols} />
           <Stat label="Chunks" value={stats.chunks} />
+          <Stat label="Links" value={stats.edges} />
           {stats.chunks !== undefined && (
             <Stat label="Embedded" value={`${stats.embedded ?? 0}/${stats.chunks}`} />
           )}

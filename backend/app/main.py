@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, repos, search
+from app.api import health, intel, repos, search
 from app.core.config import get_settings
 from app.ingest.pipeline import mark_interrupted
 
@@ -27,3 +27,4 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api")
 app.include_router(repos.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
+app.include_router(intel.router, prefix="/api")

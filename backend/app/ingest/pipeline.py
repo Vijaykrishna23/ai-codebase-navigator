@@ -22,12 +22,14 @@ from app.ingest.github import (
     shallow_clone,
 )
 from app.ingest.parse import ParsedFile, parse_source
+from app.ingest.resolve import LinkFile, build_edges
 from app.ingest.walk import WalkedFile, walk_repo
-from app.models import Chunk, File, Repo, RepoStatus, Symbol
+from app.models import Chunk, Edge, File, Repo, RepoStatus, Symbol
 
 log = logging.getLogger(__name__)
 
 BATCH_FILES = 200
+BATCH_EDGES = 5000
 
 _tasks: dict[int, asyncio.Task] = {}
 _semaphore: asyncio.Semaphore | None = None
@@ -43,6 +45,11 @@ def clone_dir(owner: str, name: str, sha: str) -> Path:
 
 def start_ingest(repo_id: int) -> None:
     _start(repo_id, _ingest)
+
+
+def start_link(repo_id: int) -> None:
+    """Rebuild the code-intelligence edges of an indexed repo from its checkout."""
+    _start(repo_id, _relink)
 
 
 def start_embed(repo_id: int) -> None:
@@ -180,22 +187,25 @@ async def _ingest(repo_id: int) -> None:
     }
     await _update(repo_id, stats=stats)
 
+    links: list[LinkFile] = []
     for start in range(0, len(files), BATCH_FILES):
         batch = files[start : start + BATCH_FILES]
         parsed = await asyncio.to_thread(_parse_batch, batch)
-        n_symbols, n_errors, n_chunks = await _store_batch(repo_id, parsed)
+        n_symbols, n_errors, n_chunks = await _store_batch(repo_id, parsed, links)
         stats["parsed"] += sum(1 for f in batch if f.language)
         stats["symbols"] += n_symbols
         stats["parse_errors"] += n_errors
         stats["chunks"] += n_chunks
         await _update(repo_id, stats=dict(stats))
 
+    await _link_stage(repo_id, dest, links, [f.path for f in files], stats)
     await _embed_stage(repo_id, stats)
 
     stats["duration_s"] = round(time.monotonic() - started, 1)
     await _update(
         repo_id,
         status=RepoStatus.READY,
+        error=None,
         stats=stats,
         indexed_at=datetime.now(UTC),
     )
@@ -233,7 +243,9 @@ async def _next_ids(session, table: str, n: int) -> list[int]:
     return list(result.scalars())
 
 
-async def _store_batch(repo_id: int, parsed: list[Parsed]) -> tuple[int, int, int]:
+async def _store_batch(
+    repo_id: int, parsed: list[Parsed], links: list[LinkFile]
+) -> tuple[int, int, int]:
     async with SessionLocal() as session:
         file_ids = await _next_ids(session, "files", len(parsed))
         file_rows = []
@@ -270,6 +282,7 @@ async def _store_batch(repo_id: int, parsed: list[Parsed]) -> tuple[int, int, in
             )
             if p is None:
                 continue
+            links.append(LinkFile(file_id, f.path, f.language, f.is_test, ids, p))
             n_errors += p.has_error
             for sid, s in zip(ids, p.symbols, strict=True):
                 symbol_rows.append(
@@ -294,6 +307,94 @@ async def _store_batch(repo_id: int, parsed: list[Parsed]) -> tuple[int, int, in
             await session.execute(insert(Chunk), chunk_rows)
         await session.commit()
     return n_symbols, n_errors, len(chunk_rows)
+
+
+async def _link_stage(
+    repo_id: int,
+    checkout: Path,
+    links: list[LinkFile],
+    all_paths: list[str],
+    stats: dict[str, Any],
+) -> None:
+    """Resolve imports, calls, references, inheritance and tests into edges.
+    Never fails the ingest: search works without edges and relink can retry."""
+    stats.update(linking="running", linking_note=None)
+    await _update(repo_id, stats=dict(stats))
+    started = time.monotonic()
+    try:
+        rows = await asyncio.to_thread(build_edges, repo_id, links, checkout, all_paths)
+        async with SessionLocal() as session:
+            await session.execute(delete(Edge).where(Edge.repo_id == repo_id))
+            for start in range(0, len(rows), BATCH_EDGES):
+                await session.execute(insert(Edge), rows[start : start + BATCH_EDGES])
+            await session.commit()
+        stats["edges"] = len(rows)
+        stats["edge_kinds"] = dict(Counter(r["kind"] for r in rows).most_common())
+        stats["linking"] = "done"
+    except Exception as exc:
+        log.exception("Linking repo %s failed", repo_id)
+        stats["linking"] = "failed"
+        stats["linking_note"] = f"{exc.__class__.__name__}: {exc}"
+    stats["linking_duration_s"] = round(time.monotonic() - started, 1)
+    await _update(repo_id, stats=dict(stats))
+
+
+async def _relink(repo_id: int) -> None:
+    async with SessionLocal() as session:
+        repo = await session.get(Repo, repo_id)
+        if repo is None or not repo.sha:
+            return
+        stats = dict(repo.stats)
+        checkout = clone_dir(repo.owner, repo.name, repo.sha)
+        files = (
+            await session.execute(
+                select(File.id, File.path, File.language, File.is_test).where(
+                    File.repo_id == repo_id
+                )
+            )
+        ).all()
+        symbols = (
+            await session.execute(
+                select(
+                    Symbol.id,
+                    Symbol.file_id,
+                    Symbol.kind,
+                    Symbol.qualified_name,
+                    Symbol.start_line,
+                ).where(Symbol.repo_id == repo_id)
+            )
+        ).all()
+    if not checkout.is_dir():
+        stats["linking"] = "failed"
+        stats["linking_note"] = "The checkout is missing. Re-index the repository."
+        await _update(repo_id, stats=stats)
+        return
+    by_file: dict[int, dict[tuple, int]] = {}
+    for sid, file_id, kind, qualified_name, start_line in symbols:
+        by_file.setdefault(file_id, {}).setdefault(
+            (kind, qualified_name, start_line), sid
+        )
+    sources = [f for f in files if f.language]
+    links = await asyncio.to_thread(_reparse, checkout, sources, by_file)
+    await _link_stage(repo_id, checkout, links, [f.path for f in files], stats)
+
+
+def _reparse(
+    checkout: Path, files: list, by_file: dict[int, dict[tuple, int]]
+) -> list[LinkFile]:
+    """Parse the checkout again and match symbols to their stored rows. Symbols
+    the stored index does not have (the parser changed since) get no edges."""
+    links = []
+    for f in files:
+        try:
+            src = (checkout / f.path).read_bytes()
+        except OSError:
+            continue
+        p = parse_source(f.path, f.language, src)
+        stored = by_file.get(f.id, {})
+        ids = [stored.get((s.kind, s.qualified_name, s.start_line)) for s in p.symbols]
+        links.append(LinkFile(f.id, f.path, f.language, f.is_test, ids, p))
+    return links
 
 
 async def _embed_stage(repo_id: int, stats: dict[str, Any]) -> None:

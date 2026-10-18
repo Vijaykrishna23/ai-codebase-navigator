@@ -115,3 +115,44 @@ class Chunk(Base):
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(get_settings().embedding_dim)
     )
+
+
+class EdgeKind:
+    IMPORTS = "imports"
+    CALLS = "calls"
+    REFERENCES = "references"
+    INHERITS = "inherits"
+    TESTS = "tests"
+
+
+class Edge(Base):
+    """A static relationship between files or symbols, with a confidence of
+    high, medium or low. A null destination is an external package or an
+    import that did not resolve; dst_name keeps the raw target text."""
+
+    __tablename__ = "edges"
+    __table_args__ = (
+        Index("ix_edges_repo_kind", "repo_id", "kind"),
+        Index("ix_edges_src_symbol", "src_symbol_id"),
+        Index("ix_edges_dst_symbol", "dst_symbol_id"),
+        Index("ix_edges_src_file", "src_file_id"),
+        Index("ix_edges_dst_file", "dst_file_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(20))
+    src_file_id: Mapped[int] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"))
+    src_symbol_id: Mapped[int | None] = mapped_column(
+        ForeignKey("symbols.id", ondelete="CASCADE")
+    )
+    src_name: Mapped[str | None] = mapped_column(Text)  # e.g. a JS test title
+    dst_file_id: Mapped[int | None] = mapped_column(
+        ForeignKey("files.id", ondelete="CASCADE")
+    )
+    dst_symbol_id: Mapped[int | None] = mapped_column(
+        ForeignKey("symbols.id", ondelete="CASCADE")
+    )
+    dst_name: Mapped[str] = mapped_column(Text)
+    line: Mapped[int | None] = mapped_column(Integer)
+    confidence: Mapped[str] = mapped_column(String(10))
