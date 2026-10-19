@@ -1,0 +1,137 @@
+{
+  "repo": "sindresorhus/ky",
+  "questions": [
+    {
+      "id": "ky-01",
+      "category": "understanding",
+      "question": "What does this library do and what are its main modules?",
+      "gold": {
+        "files": ["source/index.ts", "source/core/Ky.ts"],
+        "symbols": ["Ky", "createInstance"]
+      },
+      "related_files": ["source/utils/merge.ts", "source/types/options.ts", "source/core/constants.ts", "readme.md"],
+      "expected": "Ky is a small HTTP client built on the Fetch API with method shortcuts, JSON helpers, retries, timeouts, hooks and HTTPError for non-2xx responses. index.ts exports the default instance from createInstance; core/Ky.ts holds the Ky class that runs requests; errors/ holds error classes; utils/ holds merging, timeout, delay and body helpers; types/ holds option types."
+    },
+    {
+      "id": "ky-02",
+      "category": "flow",
+      "question": "What happens when I call ky.get(url).json()?",
+      "gold": {
+        "files": ["source/index.ts", "source/core/Ky.ts"],
+        "symbols": ["createInstance", "Ky.create", "#fetch", "#run"]
+      },
+      "related_files": ["source/utils/merge.ts", "source/utils/timeout.ts"],
+      "expected": "ky.get is created in createInstance; it calls createRequest, which merges defaults and options with validateAndMerge and calls Ky.create. Ky.create builds a Ky instance (constructor normalises options and builds the Request) and returns a promise from #run, which runs #fetch (beforeRequest hooks, then fetch wrapped by timeout), afterResponse hooks, HTTPError checks and retries. The returned promise gets body methods such as .json() which read the text and parse it with parseJson, with optional schema validation."
+    },
+    {
+      "id": "ky-03",
+      "category": "flow",
+      "question": "How does retry work after a failed request, including how the delay is calculated?",
+      "gold": {
+        "files": ["source/core/Ky.ts"],
+        "symbols": ["#retryFromError", "#calculateRetryDelay"]
+      },
+      "related_files": ["source/core/retry-timing.ts", "source/utils/normalize.ts", "source/utils/delay.ts"],
+      "expected": "On an error #run calls #retryFromError, which calls #calculateRetryDelay: it checks the retry limit, methods, status codes, shouldRetry and ForceRetryError, honours Retry-After or similar headers through getRetryTimingHeader and calculateRetryTimingDelay (capped by maxRetryAfter), and otherwise uses retry.delay with backoffLimit and jitter. #retryFromError then waits with delay (respecting the total timeout), runs beforeRetry hooks and fetches again."
+    },
+    {
+      "id": "ky-04",
+      "category": "location",
+      "question": "Where is the request timeout implemented?",
+      "gold": {
+        "files": ["source/utils/timeout.ts", "source/errors/TimeoutError.ts"],
+        "symbols": ["timeout", "TimeoutError"]
+      },
+      "related_files": ["source/core/Ky.ts"],
+      "expected": "source/utils/timeout.ts exports timeout(), which races fetch against a setTimeout that aborts the AbortController and rejects with TimeoutError; Ky.#fetch calls it when a timeout is set. There is also a totalTimeout across retries handled in Ky.ts (#raceWithTotalTimeout, #getRemainingTotalTimeout)."
+    },
+    {
+      "id": "ky-05",
+      "category": "relationships",
+      "question": "Where and in what order are the hooks (beforeRequest, afterResponse, beforeRetry, beforeError) run?",
+      "gold": {
+        "files": ["source/core/Ky.ts"],
+        "symbols": ["#runBeforeRequestHooks", "#runAfterResponseHooks", "#retryFromError", "#throwProcessedError"]
+      },
+      "related_files": ["source/types/hooks.ts", "source/utils/merge.ts"],
+      "expected": "beforeRequest hooks run in #runBeforeRequestHooks before fetch inside #fetch (a hook may return a Request or a Response). afterResponse hooks run in #runAfterResponseHooks after a response arrives and may replace it. beforeRetry hooks run in #retryFromError before a retried fetch. beforeError hooks run in #throwProcessedError before an error is thrown to the caller. init hooks run synchronously in the constructor."
+    },
+    {
+      "id": "ky-06",
+      "category": "location",
+      "question": "Where does ky throw HTTPError for non-2xx responses?",
+      "gold": {
+        "files": ["source/core/Ky.ts", "source/errors/HTTPError.ts"],
+        "symbols": ["HTTPError", "#run"]
+      },
+      "related_files": ["source/errors/KyError.ts"],
+      "expected": "In Ky.#run, after afterResponse hooks, when the response is not ok and #shouldThrowHttpErrors says so (throwHttpErrors option, which can be a function of status), it creates new HTTPError(response, request, options) and either retries it or throws it through #throwProcessedError. HTTPError is defined in source/errors/HTTPError.ts and extends KyError."
+    },
+    {
+      "id": "ky-07",
+      "category": "relationships",
+      "question": "How are options from ky.extend merged with the parent instance's defaults?",
+      "gold": {
+        "files": ["source/utils/merge.ts", "source/index.ts"],
+        "symbols": ["validateAndMerge", "deepMerge", "mergeHeaders", "mergeHooks"]
+      },
+      "related_files": ["source/core/constants.ts"],
+      "expected": "ky.extend in createInstance calls validateAndMerge(defaults, newDefaults) (a function argument receives a deep clone of the parent defaults) and creates a new instance. validateAndMerge calls deepMerge, which merges plain objects recursively, merges headers with mergeHeaders (undefined deletes a header), concatenates hooks with mergeHooks, merges search parameters, and supports replace markers to replace instead of merge."
+    },
+    {
+      "id": "ky-08",
+      "category": "testing",
+      "question": "How is the retry behaviour tested?",
+      "gold": {
+        "files": ["test/retry.ts"],
+        "symbols": ["retry"]
+      },
+      "related_files": ["test/retry-options.ts", "test/retry-decisions.ts", "test/retry-timing.ts", "test/helpers"],
+      "expected": "test/retry.ts (AVA) starts a local test server from test/helpers and counts requests to check retries on network errors and 5xx status codes, only on configured status codes and methods, Retry-After handling, limits and backoff. Related files: test/retry-options.ts, test/retry-decisions.ts and test/retry-timing.ts."
+    },
+    {
+      "id": "ky-09",
+      "category": "relationships",
+      "question": "What error classes does ky define and how do the type guards identify them?",
+      "gold": {
+        "files": ["source/errors/KyError.ts", "source/utils/type-guards.ts"],
+        "symbols": ["KyError", "isHTTPError", "isKyError"]
+      },
+      "related_files": ["source/errors/HTTPError.ts", "source/errors/TimeoutError.ts", "source/errors/NetworkError.ts", "source/errors/ForceRetryError.ts", "source/errors/ResponseSizeError.ts", "source/errors/SchemaValidationError.ts", "source/errors/NonError.ts"],
+      "expected": "source/errors has KyError (base), HTTPError, TimeoutError, NetworkError, ForceRetryError, ResponseSizeError, SchemaValidationError and NonError. source/utils/type-guards.ts exports isKyError, isHTTPError, isNetworkError, isTimeoutError, isForceRetryError and isResponseSizeError, built on isErrorType, which accepts instanceof or an isKyError brand plus a matching name, so it also works across realms."
+    },
+    {
+      "id": "ky-10",
+      "category": "location",
+      "question": "How do the prefix and baseUrl options combine with the request input URL?",
+      "gold": {
+        "files": ["source/core/Ky.ts"],
+        "symbols": ["resolveInput"]
+      },
+      "related_files": ["test/prefix.ts", "test/base-url.ts"],
+      "expected": "resolveInput in core/Ky.ts: when prefix is set it joins prefix and input with exactly one slash; when baseUrl is set and the input is not absolute it resolves the input with new URL(input, baseUrl); a malformed protocol with baseUrl throws a TypeError; non-string inputs pass through unchanged."
+    },
+    {
+      "id": "ky-11",
+      "category": "testing",
+      "question": "Which tests cover the hooks feature?",
+      "gold": {
+        "files": ["test/hooks.ts"],
+        "symbols": ["beforeRequest"]
+      },
+      "related_files": ["test-d/hooks.ts", "test/retry.ts"],
+      "expected": "test/hooks.ts covers beforeRequest, afterResponse, beforeRetry, beforeError and init hooks, async hooks, hooks returning a Response or Request, and hooks through extend and retries. test-d/hooks.ts has type-level tests."
+    },
+    {
+      "id": "ky-12",
+      "category": "understanding",
+      "question": "How does ky enforce a maximum response size?",
+      "gold": {
+        "files": ["source/utils/body.ts", "source/errors/ResponseSizeError.ts"],
+        "symbols": ["limitResponseSize", "ResponseSizeError"]
+      },
+      "related_files": ["source/core/Ky.ts", "test/response-size.ts"],
+      "expected": "Ky.#limitResponseSize wraps the response with limitResponseSize from utils/body.ts, which pipes the body through a TransformStream that counts bytes and errors with ResponseSizeError when the limit is exceeded. ResponseSizeError is in source/errors/ResponseSizeError.ts; test/response-size.ts covers it."
+    }
+  ]
+}

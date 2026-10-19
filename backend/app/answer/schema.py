@@ -111,6 +111,13 @@ class Usage(BaseModel):
     model_calls: int = 1
 
 
+class Citations(BaseModel):
+    """Evidence ids the model cited before validation, and how many were in the ledger."""
+
+    cited: int = 0
+    valid: int = 0
+
+
 class Answer(BaseModel):
     mode: Literal["baseline", "navigator"]
     question: str
@@ -125,3 +132,4 @@ class Answer(BaseModel):
     trace: list[Step] = []
     # Ledger size, which can exceed the cited evidence returned above.
     evidence_total: int = 0
+    citations: Citations = Citations()

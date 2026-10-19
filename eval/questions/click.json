@@ -1,0 +1,137 @@
+{
+  "repo": "pallets/click",
+  "questions": [
+    {
+      "id": "click-01",
+      "category": "understanding",
+      "question": "What does this repository do, and what are its main building blocks?",
+      "gold": {
+        "files": ["src/click/core.py", "src/click/decorators.py"],
+        "symbols": ["Command", "Group", "Context", "Option"]
+      },
+      "related_files": ["src/click/__init__.py", "src/click/types.py", "src/click/parser.py", "README.md"],
+      "expected": "Click is a Python library for building command line interfaces with decorators. Core pieces: Command and Group (commands and nested subcommands), Context (per-invocation state), Parameter with Option and Argument, ParamType conversion in types.py, and the decorators (click.command, click.option) that build them."
+    },
+    {
+      "id": "click-02",
+      "category": "flow",
+      "question": "What happens when a Click command is invoked from the command line, from main() to the user's callback?",
+      "gold": {
+        "files": ["src/click/core.py"],
+        "symbols": ["Command.main", "make_context", "parse_args", "Command.invoke", "Context.invoke"]
+      },
+      "related_files": ["src/click/parser.py"],
+      "expected": "Command.main (or __call__) builds a Context via make_context, which calls parse_args; parse_args uses the parser (make_parser / _OptionParser) and each Parameter's handle_parse_result to fill ctx.params; then Command.invoke calls ctx.invoke(self.callback, **ctx.params). main also handles ClickException, Abort and Exit and standalone_mode."
+    },
+    {
+      "id": "click-03",
+      "category": "location",
+      "question": "Where is the command line parsing of options and arguments implemented?",
+      "gold": {
+        "files": ["src/click/parser.py"],
+        "symbols": ["_OptionParser"]
+      },
+      "related_files": ["src/click/core.py"],
+      "expected": "click/parser.py, class _OptionParser with parse_args, _process_args_for_options, _match_long_opt and _match_short_opt; Command.make_parser builds it and each parameter registers itself through add_to_parser."
+    },
+    {
+      "id": "click-04",
+      "category": "relationships",
+      "question": "How does a Group resolve and run a subcommand?",
+      "gold": {
+        "files": ["src/click/core.py"],
+        "symbols": ["Group.invoke", "Group.resolve_command", "get_command"]
+      },
+      "related_files": [],
+      "expected": "Group.invoke takes the first protected argument, calls resolve_command (which uses get_command, with token_normalize_func fallback, and fails with NoSuchCommand or a usage error), creates a sub context with cmd.make_context and invokes the subcommand; chain mode handles multiple subcommands and result_callback processes results."
+    },
+    {
+      "id": "click-05",
+      "category": "location",
+      "question": "Where does Click read option values from environment variables?",
+      "gold": {
+        "files": ["src/click/core.py"],
+        "symbols": ["resolve_envvar_value", "value_from_envvar"]
+      },
+      "related_files": [],
+      "expected": "Parameter.resolve_envvar_value and value_from_envvar, overridden in Option (which builds the name from Context.auto_envvar_prefix when auto envvars are on); they are called from consume_value when the command line gives no value."
+    },
+    {
+      "id": "click-06",
+      "category": "relationships",
+      "question": "Which classes inherit from ParamType, and what method do they override to convert values?",
+      "gold": {
+        "files": ["src/click/types.py"],
+        "symbols": ["ParamType", "convert", "Choice", "IntParamType", "Path"]
+      },
+      "related_files": [],
+      "expected": "ParamType subclasses in types.py include StringParamType, Choice, DateTime, IntParamType/FloatParamType via _NumberParamTypeBase, IntRange/FloatRange, BoolParamType, UUIDParameterType, File, Path, Tuple (CompositeParamType), FuncParamType and UnprocessedParamType. Each overrides convert(value, param, ctx) and calls self.fail on bad input."
+    },
+    {
+      "id": "click-07",
+      "category": "testing",
+      "question": "How is CliRunner tested, and what does it do for tests?",
+      "gold": {
+        "files": ["src/click/testing.py", "tests/test_testing.py"],
+        "symbols": ["CliRunner", "CliRunner.invoke", "isolation"]
+      },
+      "related_files": ["tests/conftest.py"],
+      "expected": "CliRunner in testing.py invokes a command in an isolated environment (isolation swaps stdin/stdout/stderr, env and terminal helpers) and returns a Result with output, exit_code and exception. tests/test_testing.py exercises it (test_runner, stdin echo and prompts, exit codes, env); conftest.py provides the runner fixture."
+    },
+    {
+      "id": "click-08",
+      "category": "flow",
+      "question": "How does shell completion work when the user presses tab?",
+      "gold": {
+        "files": ["src/click/shell_completion.py"],
+        "symbols": ["shell_complete", "ShellComplete", "_resolve_context", "get_completions"]
+      },
+      "related_files": ["src/click/core.py"],
+      "expected": "Command.main calls _main_shell_completion when the completion env var is set, which calls shell_completion.shell_complete; it picks a ShellComplete subclass (Bash, Zsh, Fish, PowerShell), and complete/get_completions resolves the context with _resolve_context, finds the incomplete parameter or command with _resolve_incomplete and calls its shell_complete to return CompletionItems."
+    },
+    {
+      "id": "click-09",
+      "category": "understanding",
+      "question": "What is the Context object for and how do callbacks get access to it?",
+      "gold": {
+        "files": ["src/click/core.py", "src/click/decorators.py"],
+        "symbols": ["Context", "pass_context"]
+      },
+      "related_files": ["src/click/globals.py"],
+      "expected": "Context holds per-invocation state: the command, parent context, params, obj, meta, default_map and settings, plus resource cleanup (with_resource, call_on_close). Contexts nest for subcommands. pass_context injects it as the first argument using get_current_context; pass_obj and make_pass_decorator pass ctx.obj or an object of a type found with find_object."
+    },
+    {
+      "id": "click-10",
+      "category": "relationships",
+      "question": "What calls Parameter.handle_parse_result?",
+      "gold": {
+        "files": ["src/click/core.py"],
+        "symbols": ["handle_parse_result", "Command.parse_args"]
+      },
+      "related_files": [],
+      "expected": "Command.parse_args calls handle_parse_result for every parameter, in the order from iter_params_for_processing. handle_parse_result then calls consume_value and process_value and stores the value in ctx.params."
+    },
+    {
+      "id": "click-11",
+      "category": "testing",
+      "question": "Where are the tests for options that take values from environment variables?",
+      "gold": {
+        "files": ["tests/test_options.py"],
+        "symbols": ["envvar"]
+      },
+      "related_files": ["tests/test_basic.py", "tests/test_defaults.py"],
+      "expected": "tests/test_options.py has the envvar tests, for example test_empty_envvar, test_multiple_envvar, test_envvar_container_type, test_boolean_flag_envvar and test_boolean_envvar_bad_values; they invoke commands through the runner fixture with env set."
+    },
+    {
+      "id": "click-12",
+      "category": "location",
+      "question": "Where are Click's exception types defined and how is a usage error shown to the user?",
+      "gold": {
+        "files": ["src/click/exceptions.py"],
+        "symbols": ["ClickException", "UsageError", "UsageError.show"]
+      },
+      "related_files": ["src/click/core.py"],
+      "expected": "src/click/exceptions.py defines ClickException and subclasses UsageError, BadParameter, MissingParameter, NoSuchOption, NoSuchCommand, BadOptionUsage, BadArgumentUsage, FileError, plus Abort and Exit. UsageError.show prints the usage and a hint to try --help and the error message to stderr; Command.main catches ClickException and calls show, then exits with exit_code."
+    }
+  ]
+}

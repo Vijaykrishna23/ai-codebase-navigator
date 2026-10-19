@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.llm import get_llm
 from app.answer.links import github_url
 from app.answer.schema import Answer, Evidence, ModelAnswer, Usage
-from app.answer.validate import validate_answer
+from app.answer.validate import count_citations, validate_answer
 from app.core.config import get_settings
 from app.models import Repo
 from app.search.semantic import semantic_search
@@ -103,6 +103,7 @@ async def answer_baseline(session: AsyncSession, repo: Repo, question: str) -> A
         tests=[r for r in references if r.is_test],
         gaps=response.parsed_output.gaps,
         evidence=evidence,
+        citations=count_citations(response.parsed_output, ledger),
         usage=Usage(
             model=response.model,
             input_tokens=response.usage.input_tokens,

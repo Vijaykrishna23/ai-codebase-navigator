@@ -1,0 +1,226 @@
+{
+  "repo": "pmndrs/zustand",
+  "questions": [
+    {
+      "id": "zustand-01",
+      "category": "understanding",
+      "question": "What does this library do and how is the source organised?",
+      "gold": {
+        "files": [
+          "src/vanilla.ts",
+          "src/react.ts"
+        ],
+        "symbols": [
+          "createStore",
+          "create"
+        ]
+      },
+      "related_files": [
+        "src/index.ts",
+        "src/middleware.ts",
+        "src/traditional.ts",
+        "src/shallow.ts",
+        "README.md"
+      ],
+      "expected": "Zustand is a small state management library. src/vanilla.ts has the framework-agnostic store (createStore with setState, getState, getInitialState, subscribe); src/react.ts adds the React binding (create, useStore); src/middleware/ holds persist, devtools, immer, redux, combine, subscribeWithSelector and ssrSafe; shallow.ts and traditional.ts add shallow equality and equality-function hooks."
+    },
+    {
+      "id": "zustand-02",
+      "category": "flow",
+      "question": "What happens when a component calls a hook created with create() and the store later changes?",
+      "gold": {
+        "files": [
+          "src/react.ts",
+          "src/vanilla.ts"
+        ],
+        "symbols": [
+          "createImpl",
+          "useStore",
+          "useSyncExternalStore",
+          "setState"
+        ]
+      },
+      "related_files": [],
+      "expected": "create calls createImpl, which builds a vanilla store with createStore and returns useBoundStore, a hook that calls useStore(api, selector). useStore uses React.useSyncExternalStore with api.subscribe and selector(api.getState()). When setState runs, it computes the next state, merges it (unless replace), and calls every listener; React's subscription then re-reads the selected slice and re-renders if it changed."
+    },
+    {
+      "id": "zustand-03",
+      "category": "location",
+      "question": "Where is setState implemented and how does it decide whether to merge or replace state?",
+      "gold": {
+        "files": [
+          "src/vanilla.ts"
+        ],
+        "symbols": [
+          "createStoreImpl",
+          "setState"
+        ]
+      },
+      "related_files": [],
+      "expected": "In src/vanilla.ts inside createStoreImpl. setState accepts a partial or an updater function; if Object.is(nextState, state) nothing happens. Otherwise it replaces the state when replace is true or the next state is not an object (or null), and otherwise shallow merges with Object.assign({}, state, nextState). It then calls every listener with (state, previousState)."
+    },
+    {
+      "id": "zustand-04",
+      "category": "flow",
+      "question": "How does the persist middleware rehydrate state from storage, including version migrations?",
+      "gold": {
+        "files": [
+          "src/middleware/persist.ts"
+        ],
+        "symbols": [
+          "persistImpl",
+          "hydrate",
+          "migrate"
+        ]
+      },
+      "related_files": [
+        "tests/persistSync.test.tsx",
+        "tests/persistAsync.test.tsx"
+      ],
+      "expected": "persistImpl wraps setState to save partialized state via storage.setItem, then hydrate (run on creation unless skipHydration) calls onRehydrateStorage, reads storage.getItem(name) through toThenable, and if the stored version differs from options.version calls options.migrate (or warns when none is given). It merges with options.merge, sets the state, saves migrated state back, marks hasHydrated and calls the finish listeners and the post-rehydration callback. A hydration version counter guards against concurrent rehydrates."
+    },
+    {
+      "id": "zustand-05",
+      "category": "location",
+      "question": "Where is the default JSON storage for persist created?",
+      "gold": {
+        "files": [
+          "src/middleware/persist.ts"
+        ],
+        "symbols": [
+          "createJSONStorage"
+        ]
+      },
+      "related_files": [],
+      "expected": "createJSONStorage in src/middleware/persist.ts wraps a StateStorage (default () => window.localStorage) with JSON.parse and JSON.stringify, with optional reviver and replacer, and returns undefined if the storage getter throws. persistImpl's default options use createJSONStorage(() => window.localStorage)."
+    },
+    {
+      "id": "zustand-06",
+      "category": "relationships",
+      "question": "How does the immer middleware change setState?",
+      "gold": {
+        "files": [
+          "src/middleware/immer.ts"
+        ],
+        "symbols": [
+          "immerImpl"
+        ]
+      },
+      "related_files": [
+        "tests/immer.test.tsx"
+      ],
+      "expected": "immerImpl replaces store.setState with a version that wraps function updaters in immer's produce, so updaters can mutate a draft, then calls the original set; it passes the new setState to the initializer."
+    },
+    {
+      "id": "zustand-07",
+      "category": "relationships",
+      "question": "What uses the shallow function, and how does useShallow avoid re-renders?",
+      "gold": {
+        "files": [
+          "src/vanilla/shallow.ts",
+          "src/react/shallow.ts"
+        ],
+        "symbols": [
+          "shallow",
+          "useShallow"
+        ]
+      },
+      "related_files": [
+        "src/shallow.ts",
+        "tests/shallow.test.tsx"
+      ],
+      "expected": "shallow in src/vanilla/shallow.ts compares with Object.is, then iterables and Maps with compareEntries/compareIterables, and plain objects by keys. useShallow in src/react/shallow.ts wraps a selector, keeps the previous result in a ref and returns the previous reference when shallow(prev, next) is true, so useSyncExternalStore sees a stable value and skips re-renders."
+    },
+    {
+      "id": "zustand-08",
+      "category": "understanding",
+      "question": "How does the devtools middleware connect a store to the Redux DevTools extension?",
+      "gold": {
+        "files": [
+          "src/middleware/devtools.ts"
+        ],
+        "symbols": [
+          "devtoolsImpl"
+        ]
+      },
+      "related_files": [
+        "tests/devtools.test.tsx"
+      ],
+      "expected": "devtoolsImpl connects to window.__REDUX_DEVTOOLS_EXTENSION__ (skipped when disabled or unavailable, with a warning in dev), tracks connections per name and store, wraps setState to send an action and the new state to the connection, sends the initial state with init, and subscribes to messages from the extension to handle DISPATCH actions such as JUMP_TO_STATE, RESET, COMMIT, ROLLBACK and IMPORT_STATE via setStateFromDevtools."
+    },
+    {
+      "id": "zustand-09",
+      "category": "testing",
+      "question": "How is the persist middleware tested?",
+      "gold": {
+        "files": [
+          "tests/persistSync.test.tsx",
+          "tests/persistAsync.test.tsx"
+        ],
+        "symbols": [
+          "persist"
+        ]
+      },
+      "related_files": [
+        "src/middleware/persist.ts",
+        "tests/test-utils.ts"
+      ],
+      "expected": "tests/persistSync.test.tsx and tests/persistAsync.test.tsx (Vitest) use in-memory sync and async storages to check rehydration, rehydrate errors, persisting state, migrations (and a missing migrate function), partialize, merge, skipHydration and onRehydrateStorage callbacks."
+    },
+    {
+      "id": "zustand-10",
+      "category": "relationships",
+      "question": "How does subscribeWithSelector change the store's subscribe API?",
+      "gold": {
+        "files": [
+          "src/middleware/subscribeWithSelector.ts"
+        ],
+        "symbols": [
+          "subscribeWithSelectorImpl"
+        ]
+      },
+      "related_files": [
+        "tests/subscribe.test.tsx",
+        "tests/vanilla/subscribe.test.tsx"
+      ],
+      "expected": "subscribeWithSelectorImpl replaces api.subscribe with a version that takes (selector, listener, options). It keeps the current slice and only calls the listener when equalityFn (default Object.is) says the selected slice changed, passing (nextSlice, previousSlice); fireImmediately calls it once at subscribe time. With one argument it behaves like the original subscribe."
+    },
+    {
+      "id": "zustand-11",
+      "category": "location",
+      "question": "Where is the hook that lets callers pass a custom equality function?",
+      "gold": {
+        "files": [
+          "src/traditional.ts"
+        ],
+        "symbols": [
+          "useStoreWithEqualityFn",
+          "createWithEqualityFn"
+        ]
+      },
+      "related_files": [],
+      "expected": "src/traditional.ts: useStoreWithEqualityFn uses useSyncExternalStoreWithSelector from use-sync-external-store with the selector and equalityFn; createWithEqualityFn builds a bound hook with a default equality function."
+    },
+    {
+      "id": "zustand-12",
+      "category": "testing",
+      "question": "Which tests cover subscribing to a store, both plain subscribe and subscribe with a selector?",
+      "gold": {
+        "files": [
+          "tests/vanilla/subscribe.test.tsx",
+          "tests/vanilla/basic.test.ts"
+        ],
+        "symbols": [
+          "subscribe"
+        ]
+      },
+      "related_files": [
+        "tests/subscribe.test.tsx",
+        "tests/basic.test.tsx",
+        "src/vanilla.ts",
+        "src/middleware/subscribeWithSelector.ts"
+      ],
+      "expected": "tests/vanilla/subscribe.test.tsx and tests/subscribe.test.tsx both use subscribeWithSelector with createStore or create: listeners not called when state identity or the selected slice is unchanged, called when it changes, custom equality checkers, unsubscribe, and fireImmediately. Plain subscribe on the vanilla store is covered in tests/vanilla/basic.test.ts."
+    }
+  ]
+}

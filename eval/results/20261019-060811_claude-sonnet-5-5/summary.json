@@ -1,0 +1,196 @@
+{
+  "meta": {
+    "run_id": "20261019-060811_claude-sonnet-5-5",
+    "model": "claude-sonnet-5-5",
+    "effort": "high",
+    "max_tool_calls": 30,
+    "baseline_top_k": 12,
+    "judge_model": "claude-haiku-5-5",
+    "modes": [
+      "navigator"
+    ],
+    "questions": 16,
+    "repos": [
+      "expressjs/express",
+      "pallets/click",
+      "pmndrs/zustand",
+      "sindresorhus/ky"
+    ],
+    "started_at": "2026-10-19T06:08:11.583819+00:00",
+    "finished_at": "2026-10-19T06:10:04.422699+00:00"
+  },
+  "modes": {
+    "navigator": {
+      "questions": 16,
+      "errors": 0,
+      "file_recall": 0.875,
+      "symbol_recall": 1.0,
+      "file_precision": 0.7275545634920635,
+      "citation_validity": 1.0,
+      "downgraded_facts": 0,
+      "leaked_summaries": 0,
+      "no_answer": 0,
+      "correctness": 3.6875,
+      "completeness": 3.875,
+      "honesty": 3.8125,
+      "verdicts": {
+        "correct": 11,
+        "partial": 5,
+        "wrong": 0
+      },
+      "latency_median_s": 17.335,
+      "latency_max_s": 26.102,
+      "tool_calls_avg": 5.75,
+      "cost_usd_total": 0.6868919,
+      "cost_usd_avg": 0.04293074375
+    }
+  },
+  "categories": {
+    "navigator/testing": {
+      "questions": 8,
+      "errors": 0,
+      "file_recall": 0.875,
+      "symbol_recall": 1.0,
+      "file_precision": 0.5503472222222222,
+      "citation_validity": 1.0,
+      "downgraded_facts": 0,
+      "leaked_summaries": 0,
+      "no_answer": 0,
+      "correctness": 3.5,
+      "completeness": 3.625,
+      "honesty": 3.375,
+      "verdicts": {
+        "correct": 4,
+        "partial": 4,
+        "wrong": 0
+      },
+      "latency_median_s": 18.3335,
+      "latency_max_s": 26.102,
+      "tool_calls_avg": 5.5,
+      "cost_usd_total": 0.3694045,
+      "cost_usd_avg": 0.0461755625
+    },
+    "navigator/understanding": {
+      "questions": 8,
+      "errors": 0,
+      "file_recall": 0.875,
+      "symbol_recall": 1.0,
+      "file_precision": 0.9047619047619048,
+      "citation_validity": 1.0,
+      "downgraded_facts": 0,
+      "leaked_summaries": 0,
+      "no_answer": 0,
+      "correctness": 3.875,
+      "completeness": 4.125,
+      "honesty": 4.25,
+      "verdicts": {
+        "correct": 7,
+        "partial": 1,
+        "wrong": 0
+      },
+      "latency_median_s": 17.335,
+      "latency_max_s": 22.982,
+      "tool_calls_avg": 6,
+      "cost_usd_total": 0.3174874,
+      "cost_usd_avg": 0.039685925
+    }
+  },
+  "repos": {
+    "navigator/expressjs/express": {
+      "questions": 4,
+      "errors": 0,
+      "file_recall": 0.875,
+      "symbol_recall": 1.0,
+      "file_precision": 0.875,
+      "citation_validity": 1.0,
+      "downgraded_facts": 0,
+      "leaked_summaries": 0,
+      "no_answer": 0,
+      "correctness": 4,
+      "completeness": 4.25,
+      "honesty": 4.25,
+      "verdicts": {
+        "correct": 4,
+        "partial": 0,
+        "wrong": 0
+      },
+      "latency_median_s": 17.933,
+      "latency_max_s": 26.102,
+      "tool_calls_avg": 5.75,
+      "cost_usd_total": 0.157936,
+      "cost_usd_avg": 0.039484
+    },
+    "navigator/pallets/click": {
+      "questions": 4,
+      "errors": 0,
+      "file_recall": 1.0,
+      "symbol_recall": 1.0,
+      "file_precision": 0.6428571428571428,
+      "citation_validity": 1.0,
+      "downgraded_facts": 0,
+      "leaked_summaries": 0,
+      "no_answer": 0,
+      "correctness": 3.75,
+      "completeness": 4,
+      "honesty": 3.75,
+      "verdicts": {
+        "correct": 3,
+        "partial": 1,
+        "wrong": 0
+      },
+      "latency_median_s": 17.4865,
+      "latency_max_s": 22.982,
+      "tool_calls_avg": 5.75,
+      "cost_usd_total": 0.1794769,
+      "cost_usd_avg": 0.044869225
+    },
+    "navigator/pmndrs/zustand": {
+      "questions": 4,
+      "errors": 0,
+      "file_recall": 0.75,
+      "symbol_recall": 1.0,
+      "file_precision": 0.8333333333333333,
+      "citation_validity": 1.0,
+      "downgraded_facts": 0,
+      "leaked_summaries": 0,
+      "no_answer": 0,
+      "correctness": 3.25,
+      "completeness": 3.25,
+      "honesty": 3.25,
+      "verdicts": {
+        "correct": 1,
+        "partial": 3,
+        "wrong": 0
+      },
+      "latency_median_s": 16.892000000000003,
+      "latency_max_s": 17.486,
+      "tool_calls_avg": 5,
+      "cost_usd_total": 0.16256890000000002,
+      "cost_usd_avg": 0.040642225000000004
+    },
+    "navigator/sindresorhus/ky": {
+      "questions": 4,
+      "errors": 0,
+      "file_recall": 0.875,
+      "symbol_recall": 1.0,
+      "file_precision": 0.5590277777777778,
+      "citation_validity": 1.0,
+      "downgraded_facts": 0,
+      "leaked_summaries": 0,
+      "no_answer": 0,
+      "correctness": 3.75,
+      "completeness": 4,
+      "honesty": 4,
+      "verdicts": {
+        "correct": 3,
+        "partial": 1,
+        "wrong": 0
+      },
+      "latency_median_s": 19.0275,
+      "latency_max_s": 22.094,
+      "tool_calls_avg": 6.5,
+      "cost_usd_total": 0.1869101,
+      "cost_usd_avg": 0.046727525
+    }
+  }
+}

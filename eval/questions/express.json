@@ -1,0 +1,137 @@
+{
+  "repo": "expressjs/express",
+  "questions": [
+    {
+      "id": "express-01",
+      "category": "understanding",
+      "question": "What does this repository do and how is the code organised?",
+      "gold": {
+        "files": ["lib/express.js", "lib/application.js", "lib/request.js", "lib/response.js"],
+        "symbols": ["createApplication"]
+      },
+      "related_files": ["index.js", "lib/view.js", "lib/utils.js", "Readme.md"],
+      "expected": "Express is a minimal Node.js web framework. index.js exports lib/express.js, whose createApplication builds the app function and mixes in application.js (settings, use, route, render, listen), request.js and response.js (helpers added to req and res). Routing comes from the external router package; view.js resolves templates."
+    },
+    {
+      "id": "express-02",
+      "category": "flow",
+      "question": "What happens to an incoming HTTP request from the moment it reaches the app until a route handler runs?",
+      "gold": {
+        "files": ["lib/express.js", "lib/application.js"],
+        "symbols": ["app.handle", "createApplication"]
+      },
+      "related_files": ["lib/request.js", "lib/response.js"],
+      "expected": "The app function created in createApplication calls app.handle(req, res, next). app.handle sets up finalhandler as the done callback, sets X-Powered-By, links req.res and res.req, sets the prototypes of req and res to app.request and app.response, creates res.locals and calls this.router.handle. Route matching happens in the external router package, which is not in this repo."
+    },
+    {
+      "id": "express-03",
+      "category": "location",
+      "question": "Where is the router implementation that matches paths to route handlers?",
+      "gold": {
+        "files": ["lib/application.js"],
+        "symbols": ["router"]
+      },
+      "related_files": ["lib/express.js", "package.json"],
+      "expected": "Not in this repository: Express 5 requires the external 'router' package (require('router') in lib/application.js and lib/express.js). The app creates it lazily as app.router and delegates app.use, app.route and verb methods to it. A good answer says the matching code is outside the repo."
+    },
+    {
+      "id": "express-04",
+      "category": "flow",
+      "question": "How does res.send decide the response headers and when does it return 304 Not Modified?",
+      "gold": {
+        "files": ["lib/response.js"],
+        "symbols": ["res.send"]
+      },
+      "related_files": ["lib/utils.js", "lib/request.js"],
+      "expected": "res.send sets Content-Type by chunk type (html for strings, octet-stream for Buffers, delegating objects to res.json), sets the charset, computes Content-Length, generates an ETag with app.get('etag fn') when none is set, then sets status 304 if req.fresh. For 204 and 304 it strips Content-Type, Content-Length and Transfer-Encoding and sends no body; HEAD requests end without a body."
+    },
+    {
+      "id": "express-05",
+      "category": "relationships",
+      "question": "What calls compileETag and how is the result used?",
+      "gold": {
+        "files": ["lib/utils.js", "lib/application.js", "lib/response.js"],
+        "symbols": ["compileETag", "app.set"]
+      },
+      "related_files": [],
+      "expected": "app.set calls compileETag when the 'etag' setting changes and stores the result as 'etag fn'. res.send reads app.get('etag fn') to generate the ETag header. compileETag returns a weak or strong generator built with createETagGenerator, or a custom function."
+    },
+    {
+      "id": "express-06",
+      "category": "flow",
+      "question": "How does app.render find and render a view template?",
+      "gold": {
+        "files": ["lib/application.js", "lib/view.js"],
+        "symbols": ["app.render", "View", "lookup", "tryRender"]
+      },
+      "related_files": ["lib/response.js"],
+      "expected": "app.render merges app.locals and options, uses the view cache when 'view cache' is enabled, otherwise constructs the 'view' class (View) with the views root, default engine and engines. View resolves the extension, loads the engine, and lookup/resolve find the file. A missing file errors with 'Failed to lookup view'. tryRender calls view.render. res.render wraps app.render and sends the result."
+    },
+    {
+      "id": "express-07",
+      "category": "location",
+      "question": "Where is req.query parsed and how can the parser be changed?",
+      "gold": {
+        "files": ["lib/request.js", "lib/utils.js", "lib/application.js"],
+        "symbols": ["compileQueryParser", "query parser fn"]
+      },
+      "related_files": [],
+      "expected": "req.query is a getter in lib/request.js that calls this.app.get('query parser fn') on the URL query string. app.set('query parser', value) compiles the function with utils.compileQueryParser: 'simple' uses node:querystring, 'extended' uses qs (parseExtendedQueryString), false disables it, or a custom function. The default is 'simple' set in defaultConfiguration."
+    },
+    {
+      "id": "express-08",
+      "category": "relationships",
+      "question": "How does mounting one Express app inside another with app.use work?",
+      "gold": {
+        "files": ["lib/application.js"],
+        "symbols": ["app.use"]
+      },
+      "related_files": ["lib/express.js"],
+      "expected": "app.use flattens the arguments and, for each fn that looks like an app (has handle and set), sets fn.mountpath and fn.parent, registers a mounted_app wrapper on the router that restores req and res prototypes after fn.handle finishes, and emits 'mount' on the sub app. defaultConfiguration listens for 'mount' to inherit settings, trust proxy and prototypes from the parent."
+    },
+    {
+      "id": "express-09",
+      "category": "testing",
+      "question": "How is res.send tested?",
+      "gold": {
+        "files": ["test/res.send.js"],
+        "symbols": ["send"]
+      },
+      "related_files": ["test/support/utils.js"],
+      "expected": "test/res.send.js uses mocha with supertest, grouped by argument type (.send(), null, undefined, Number, String, Buffer, Object) and behaviours such as ETag generation, freshness and 304, HEAD requests and Content-Type handling."
+    },
+    {
+      "id": "express-10",
+      "category": "relationships",
+      "question": "What does res.json call to produce its output?",
+      "gold": {
+        "files": ["lib/response.js"],
+        "symbols": ["res.json", "stringify", "res.send"]
+      },
+      "related_files": [],
+      "expected": "res.json reads 'json escape', 'json replacer' and 'json spaces' from app settings, serialises with the local stringify helper, sets Content-Type to application/json if missing, then calls this.send(body)."
+    },
+    {
+      "id": "express-11",
+      "category": "understanding",
+      "question": "What default settings does a new Express app start with?",
+      "gold": {
+        "files": ["lib/application.js"],
+        "symbols": ["defaultConfiguration", "app.init"]
+      },
+      "related_files": ["lib/utils.js"],
+      "expected": "app.init sets cache, engines and settings and calls defaultConfiguration, which enables x-powered-by, sets etag 'weak', env from NODE_ENV (default development), query parser 'simple', subdomain offset 2, trust proxy false, the mount listener, app.locals with settings, mountpath '/', views './views', 'view' View, jsonp callback name 'callback', and enables 'view cache' in production."
+    },
+    {
+      "id": "express-12",
+      "category": "testing",
+      "question": "Which tests cover res.redirect, and what behaviours do they check?",
+      "gold": {
+        "files": ["test/res.redirect.js", "lib/response.js"],
+        "symbols": ["res.redirect"]
+      },
+      "related_files": [],
+      "expected": "test/res.redirect.js covers default 302 status, custom status codes, encoding of the Location URL, and content negotiation of the body (text/html, text/plain, no Accept), plus HEAD requests. res.redirect in lib/response.js sets Location via res.location and uses res.format to build the body."
+    }
+  ]
+}

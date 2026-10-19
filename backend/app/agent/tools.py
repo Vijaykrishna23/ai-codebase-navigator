@@ -318,7 +318,7 @@ class Toolbox:
             out.error = True
             out.summary = str(exc)
             out.content = str(exc)
-        except TypeError as exc:
+        except (TypeError, ValueError) as exc:
             out.error = True
             out.summary = "Bad arguments"
             out.content = f"Bad arguments for {name}: {exc}"

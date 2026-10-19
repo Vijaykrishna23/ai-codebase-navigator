@@ -1,6 +1,7 @@
 from app.answer.schema import (
     AnswerReference,
     AnswerSentence,
+    Citations,
     Evidence,
     FlowNode,
     ModelAnswer,
@@ -108,3 +109,12 @@ def validate_flow(
 
 def _descends(node: FlowNode, ancestor: FlowNode) -> bool:
     return any(c is node or _descends(node, c) for c in ancestor.children)
+
+
+def count_citations(model: ModelAnswer, ledger: dict[str, Evidence]) -> Citations:
+    """Count every evidence id the model cited, before validation drops any."""
+    ids = [e for s in model.explanation for e in s.evidence]
+    ids += [r.evidence for r in model.references]
+    ids += [r.evidence for r in getattr(model, "tests", [])]
+    ids += [f.evidence for f in getattr(model, "flow", [])]
+    return Citations(cited=len(ids), valid=sum(1 for e in ids if e in ledger))

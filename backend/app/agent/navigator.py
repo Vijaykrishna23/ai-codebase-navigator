@@ -23,7 +23,12 @@ from app.answer.schema import (
     Step,
     Usage,
 )
-from app.answer.validate import validate_answer, validate_flow, validate_references
+from app.answer.validate import (
+    count_citations,
+    validate_answer,
+    validate_flow,
+    validate_references,
+)
 from app.core.config import get_settings
 from app.ingest.pipeline import clone_dir
 from app.models import Repo
@@ -239,6 +244,7 @@ def _build_answer(
         flow=validate_flow(model.flow, entries, url_for),
         trace=trace,
         evidence_total=len(ledger),
+        citations=count_citations(model, entries),
         usage=Usage(
             model=usage.model or get_settings().llm_model,
             input_tokens=usage.input_tokens,
@@ -280,6 +286,30 @@ def _repair(args: Any) -> Any:
                 if isinstance(args.get(name), str):
                     out[name] = raw.strip()
     return out
+
+
+_FIELD_TAG = re.compile(
+    r'</?(summary|explanation|references|flow|tests|gaps|item)>|<parameter name="'
+)
+
+
+def _flattened(model: NavigatorModelAnswer) -> str | None:
+    """The model sometimes writes the whole answer into summary as tags, or
+    submits only a summary. Either way the answer has nothing to cite."""
+    if _FIELD_TAG.search(model.summary) or not (
+        model.explanation or model.references or model.gaps
+    ):
+        return (
+            "Invalid answer: only summary was filled in. Call submit_answer "
+            "again with summary as one or two plain sentences and explanation, "
+            "references, flow, tests and gaps each passed as its own JSON field."
+        )
+    return None
+
+
+def _trim_summary(model: NavigatorModelAnswer) -> NavigatorModelAnswer:
+    summary = _FIELD_TAG.split(model.summary, maxsplit=1)[0].strip()
+    return model.model_copy(update={"summary": summary or model.summary})
 
 
 def _fallback(text: str) -> NavigatorModelAnswer:
@@ -355,11 +385,15 @@ async def navigate(
 
         submit = next((b for b in tool_uses if b.name == "submit_answer"), None)
         if submit is not None:
+            model: NavigatorModelAnswer | None = None
             try:
                 model = NavigatorModelAnswer.model_validate(_repair(submit.input))
+                problem = _flattened(model)
             except ValidationError as exc:
+                problem = f"Invalid answer: {exc.errors()[:3]}"
+            if problem is not None:
                 if nudges >= MAX_NUDGES:
-                    model = _fallback(last_text)
+                    model = _trim_summary(model) if model else _fallback(last_text)
                 else:
                     nudges += 1
                     messages.append(
@@ -369,7 +403,7 @@ async def navigate(
                                 {
                                     "type": "tool_result",
                                     "tool_use_id": b.id,
-                                    "content": f"Invalid answer: {exc.errors()[:3]}"
+                                    "content": problem
                                     if b is submit
                                     else "Not run: submit_answer was called in the same turn.",
                                     "is_error": True,
