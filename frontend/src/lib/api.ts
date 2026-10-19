@@ -278,6 +278,10 @@ export function createConversation(repoId: number): Promise<Conversation> {
   return request(`/api/repos/${repoId}/conversations`, { method: "POST" });
 }
 
+export function listConversations(repoId: number): Promise<Conversation[]> {
+  return request(`/api/repos/${repoId}/conversations`);
+}
+
 export function getConversation(id: number): Promise<Conversation> {
   return request(`/api/conversations/${id}`);
 }

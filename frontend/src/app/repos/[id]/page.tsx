@@ -30,15 +30,16 @@ async function RepoHeader({ params }: { params: Promise<{ id: string }> }) {
   );
 }
 
-async function Workspace({ params }: { params: Promise<{ id: string }> }) {
-  const repo = await loadRepo(params);
+async function Workspace({ params, searchParams }: PageProps<"/repos/[id]">) {
+  const [repo, { c }] = await Promise.all([loadRepo(params), searchParams]);
   if (!repo) return null;
-  return <RepoWorkspace repo={repo} />;
+  const conversation = typeof c === "string" && /^\d+$/.test(c) ? Number(c) : null;
+  return <RepoWorkspace key={repo.id} repo={repo} initialConversation={conversation} />;
 }
 
 export default function ChatPage(props: PageProps<"/repos/[id]">) {
   return (
-    <main className="mx-auto flex h-full w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-12">
+    <main className="mx-auto flex h-full w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-12">
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">
           <Suspense fallback="Repository">
@@ -51,7 +52,7 @@ export default function ChatPage(props: PageProps<"/repos/[id]">) {
       </header>
 
       <Suspense fallback={<p className="text-sm text-neutral-500">Loading...</p>}>
-        <Workspace params={props.params} />
+        <Workspace {...props} />
       </Suspense>
     </main>
   );

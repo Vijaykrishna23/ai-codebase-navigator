@@ -1,0 +1,35 @@
+/* Line-numbered code snippets, highlighted by Shiki (src/lib/highlight.ts). */
+.code-lines pre {
+  min-width: max-content;
+  background: transparent !important;
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+.code-lines .line {
+  display: inline-block;
+  min-width: 100%;
+  padding-right: 0.75rem;
+}
+
+.code-lines .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 3.5rem;
+  padding-right: 1rem;
+  text-align: right;
+  color: #a3a3a3;
+  user-select: none;
+}
+
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+}
+
+@media (prefers-color-scheme: dark) {
+  .shiki,
+  .shiki span {
+    color: var(--shiki-dark);
+  }
+}
