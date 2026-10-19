@@ -106,6 +106,7 @@ class Usage(BaseModel):
     output_tokens: int
     latency_ms: int
     cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     tool_calls: int = 0
     model_calls: int = 1
 

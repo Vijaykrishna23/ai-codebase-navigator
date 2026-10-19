@@ -30,6 +30,11 @@ from app.models import Repo
 
 MAX_TOKENS = 16000
 MAX_NUDGES = 2
+# Tools + system and conversation history are reused across questions that
+# can be minutes apart, so they get the 1-hour TTL. The tool-loop tail is
+# re-read within seconds and uses the default 5 minutes via the top-level
+# automatic breakpoint. Longer TTLs must come first in the prompt.
+CACHE_1H = {"type": "ephemeral", "ttl": "1h"}
 
 SYSTEM = """You are the Navigator. You answer questions about one GitHub \
 repository by investigating its code with tools, then submit a structured, \
@@ -96,6 +101,9 @@ BUDGET_NOTE = (
 )
 
 
+SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM, "cache_control": CACHE_1H}]
+
+
 class AgentError(Exception):
     """A failure to show the user in place of an answer."""
 
@@ -119,6 +127,7 @@ class _Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     model_calls: int = 0
     tool_calls: int = 0
     total_input: int = 0
@@ -130,13 +139,22 @@ class _Usage:
         cache_write = u.cache_creation_input_tokens or 0
         self.input_tokens += u.input_tokens + cache_write
         self.cache_read_tokens += cache_read
+        self.cache_write_tokens += cache_write
         self.output_tokens += u.output_tokens
         self.total_input += u.input_tokens + cache_write + cache_read
         self.model_calls += 1
 
 
-def _intro(repo: Repo, question: str, history: list[PriorTurn]) -> str:
-    parts = [f"<repository>{repo.owner}/{repo.name} at commit {repo.sha}</repository>"]
+def _intro(repo: Repo, question: str, history: list[PriorTurn]) -> list[dict]:
+    """The first user message as content blocks. Each earlier turn is its own
+    block and the last one carries a cache breakpoint, so a follow-up reads
+    the history the previous follow-up already wrote and adds only its turn."""
+    blocks = [
+        {
+            "type": "text",
+            "text": f"<repository>{repo.owner}/{repo.name} at commit {repo.sha}</repository>",
+        }
+    ]
     turns = []
     for t in history:
         if t.answer is None:
@@ -157,16 +175,21 @@ def _intro(repo: Repo, question: str, history: list[PriorTurn]) -> str:
             if cited:
                 lines.append("cited: " + "; ".join(cited))
         turns.append("<turn>\n" + "\n".join(lines) + "\n</turn>")
+    question_text = f"<question>{question}</question>"
     if turns:
-        parts.append(
-            "<previous_turns>\nEarlier questions in this conversation. Evidence "
-            "ids cited there are still valid and can be cited again; read the "
-            "code again if you need its contents.\n"
-            + "\n".join(turns)
-            + "\n</previous_turns>"
+        blocks.append(
+            {
+                "type": "text",
+                "text": "<previous_turns>\nEarlier questions in this conversation. "
+                "Evidence ids cited there are still valid and can be cited again; "
+                "read the code again if you need its contents.",
+            }
         )
-    parts.append(f"<question>{question}</question>")
-    return "\n\n".join(parts)
+        blocks += [{"type": "text", "text": t} for t in turns]
+        blocks[-1]["cache_control"] = CACHE_1H
+        question_text = "</previous_turns>\n\n" + question_text
+    blocks.append({"type": "text", "text": question_text})
+    return blocks
 
 
 def _cited(answer: Answer) -> list[str]:
@@ -221,6 +244,7 @@ def _build_answer(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cache_read_tokens=usage.cache_read_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
             tool_calls=usage.tool_calls,
             model_calls=usage.model_calls,
             latency_ms=round((time.monotonic() - started) * 1000),
@@ -313,7 +337,7 @@ async def navigate(
         response = await llm.messages.create(
             model=settings.llm_model,
             max_tokens=MAX_TOKENS,
-            system=SYSTEM,
+            system=SYSTEM_BLOCKS,
             tools=ALL_TOOLS,
             tool_choice={"type": "auto"},
             messages=messages,
