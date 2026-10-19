@@ -156,3 +156,44 @@ class Edge(Base):
     dst_name: Mapped[str] = mapped_column(Text)
     line: Mapped[int | None] = mapped_column(Integer)
     confidence: Mapped[str] = mapped_column(String(10))
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+    __table_args__ = (Index("ix_conversations_repo", "repo_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id", ondelete="CASCADE"))
+    title: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class MessageStatus:
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class Message(Base):
+    """One question and its answer. ledger holds every evidence entry the
+    turn saw, so follow-ups can cite it; trace holds the tool steps."""
+
+    __tablename__ = "messages"
+    __table_args__ = (Index("ix_messages_conversation", "conversation_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE")
+    )
+    mode: Mapped[str] = mapped_column(String(20))
+    question: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default=MessageStatus.RUNNING)
+    answer: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    ledger: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    trace: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, intel, repos, search
+from app.api import conversations, health, intel, repos, search
 from app.core.config import get_settings
 from app.ingest.pipeline import mark_interrupted
 
@@ -28,3 +28,4 @@ app.include_router(health.router, prefix="/api")
 app.include_router(repos.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
 app.include_router(intel.router, prefix="/api")
+app.include_router(conversations.router, prefix="/api")

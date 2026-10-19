@@ -1,14 +1,23 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import { AnswerView } from "@/components/AnswerView";
+import { AnswerView, StepList } from "@/components/AnswerView";
 import { SearchPanel } from "@/components/SearchPanel";
-import { ask, getHealth, type Answer, type AskMode, type Health, type Repo } from "@/lib/api";
+import {
+  createConversation,
+  getHealth,
+  sendMessage,
+  type Answer,
+  type AskMode,
+  type Health,
+  type Repo,
+  type Step,
+} from "@/lib/api";
 
 type Tab = "ask" | "search";
 
-type Turn = { id: number; question: string; mode: AskMode } & (
+type Turn = { id: number; question: string; mode: AskMode; steps: Step[] } & (
   | { state: "pending" }
   | { state: "done"; answer: Answer }
   | { state: "error"; error: string }
@@ -79,23 +88,51 @@ export function RepoWorkspace({ repo }: { repo: Repo }) {
 
 function AskPanel({ repoId }: { repoId: number }) {
   const [question, setQuestion] = useState("");
-  const [mode, setMode] = useState<AskMode>("baseline");
+  const [mode, setMode] = useState<AskMode>("navigator");
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [conversationId, setConversationId] = useState<number | null>(null);
+  const abort = useRef<AbortController | null>(null);
   const pending = turns.some((t) => t.state === "pending");
+
+  useEffect(() => () => abort.current?.abort(), []);
+
+  function newConversation() {
+    abort.current?.abort();
+    setTurns([]);
+    setConversationId(null);
+  }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const q = question.trim();
     if (!q || pending) return;
     const id = Date.now();
-    setTurns((prev) => [...prev, { id, question: q, mode, state: "pending" }]);
+    setTurns((prev) => [...prev, { id, question: q, mode, steps: [], state: "pending" }]);
     setQuestion("");
-    const update = (patch: Partial<Turn> & Pick<Turn, "state">) =>
-      setTurns((prev) => prev.map((t) => (t.id === id ? ({ ...t, ...patch } as Turn) : t)));
+    const update = (fn: (t: Turn) => Turn) =>
+      setTurns((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
+    const controller = new AbortController();
+    abort.current = controller;
     try {
-      update({ state: "done", answer: await ask(repoId, q, mode) });
+      let cid = conversationId;
+      if (cid === null) {
+        cid = (await createConversation(repoId)).id;
+        setConversationId(cid);
+      }
+      await sendMessage(
+        cid,
+        q,
+        mode,
+        {
+          onStep: (step) => update((t) => ({ ...t, steps: [...t.steps, step] })),
+          onAnswer: (answer) => update((t) => ({ ...t, state: "done", answer })),
+          onError: (error) => update((t) => ({ ...t, state: "error", error })),
+        },
+        controller.signal,
+      );
     } catch (err) {
-      update({ state: "error", error: (err as Error).message });
+      if (controller.signal.aborted) return;
+      update((t) => ({ ...t, state: "error", error: (err as Error).message }));
     }
   }
 
@@ -104,8 +141,9 @@ function AskPanel({ repoId }: { repoId: number }) {
       <section className="flex flex-1 flex-col gap-8">
         {turns.length === 0 && (
           <p className="rounded-md border border-dashed border-neutral-300 p-6 text-sm text-neutral-500 dark:border-neutral-700">
-            Ask how something works, where it lives, or what calls it. Baseline mode answers from the
-            top code chunks found by semantic search.
+            Ask how something works, where it lives, or what calls it. Navigator investigates with
+            search and code-intelligence tools; Baseline answers from the top chunks found by
+            semantic search. Follow-up questions keep the evidence gathered so far.
           </p>
         )}
         {turns.map((t) => (
@@ -114,8 +152,20 @@ function AskPanel({ repoId }: { repoId: number }) {
               {t.question}
               <span className="ml-2 text-xs text-neutral-500">{t.mode}</span>
             </p>
-            {t.state === "pending" && <p className="text-sm text-neutral-500">Retrieving code and answering...</p>}
-            {t.state === "error" && <p className="text-sm text-red-600">{t.error}</p>}
+            {t.state === "pending" && (
+              <div className="flex flex-col gap-2">
+                <StepList steps={t.steps} />
+                <p className="animate-pulse text-sm text-neutral-500">
+                  {t.mode === "navigator" ? "Investigating..." : "Retrieving code and answering..."}
+                </p>
+              </div>
+            )}
+            {t.state === "error" && (
+              <div className="flex flex-col gap-2">
+                <StepList steps={t.steps} />
+                <p className="text-sm text-red-600">{t.error}</p>
+              </div>
+            )}
             {t.state === "done" && <AnswerView answer={t.answer} />}
           </div>
         ))}
@@ -138,16 +188,25 @@ function AskPanel({ repoId }: { repoId: number }) {
             Ask
           </button>
         </div>
-        <div className="flex items-center gap-4 text-sm">
+        <div className="flex flex-wrap items-center gap-4 text-sm">
           <span className="text-neutral-500">Mode</span>
+          <label className="flex items-center gap-1.5">
+            <input type="radio" checked={mode === "navigator"} onChange={() => setMode("navigator")} />
+            Navigator
+          </label>
           <label className="flex items-center gap-1.5">
             <input type="radio" checked={mode === "baseline"} onChange={() => setMode("baseline")} />
             Baseline (RAG)
           </label>
-          <label className="flex items-center gap-1.5 text-neutral-400" title="Arrives with milestone 5">
-            <input type="radio" disabled checked={mode === "navigator"} onChange={() => setMode("navigator")} />
-            Navigator (coming)
-          </label>
+          {turns.length > 0 && (
+            <button
+              type="button"
+              onClick={newConversation}
+              className="ml-auto text-neutral-500 hover:text-neutral-900 dark:hover:text-white"
+            >
+              New conversation
+            </button>
+          )}
         </div>
       </form>
     </div>

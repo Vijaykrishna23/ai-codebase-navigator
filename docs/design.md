@@ -173,8 +173,9 @@ Same UI and answer rendering, but the pipeline is: embed the question, take top-
 | GET | `/api/repos/{id}/intel/importers` | `path`: files importing the file or its names |
 | GET | `/api/repos/{id}/intel/tests` | `symbol`, `id` or `path`: tests that exercise the target |
 | GET | `/api/repos/{id}/intel/hierarchy` | `symbol` or `id`: base classes and subclasses |
-| POST | `/api/repos/{id}/ask` | Body `{question, mode}`. Non-streaming answer; baseline only until conversations and SSE land in milestone 5 |
+| POST | `/api/repos/{id}/ask` | Body `{question, mode}`. One non-streaming answer outside a conversation, for the evaluation runner |
 | POST | `/api/repos/{id}/conversations` | Start a conversation |
+| GET | `/api/repos/{id}/conversations` | List a repo's conversations |
 | POST | `/api/conversations/{cid}/messages` | Body `{question, mode: "navigator" or "baseline"}`. SSE stream of `step`, `answer`, `error` events |
 | GET | `/api/conversations/{cid}` | History with answers |
 

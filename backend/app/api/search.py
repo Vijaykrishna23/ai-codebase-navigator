@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.baseline import answer_baseline
 from app.agent.llm import LLMUnavailable
+from app.agent.navigator import AgentError, navigate
 from app.answer.links import github_url
 from app.answer.schema import Answer
 from app.core.db import get_session
@@ -157,17 +158,20 @@ class AskIn(BaseModel):
 
 @router.post("/ask")
 async def ask(repo_id: int, body: AskIn, session: Session) -> Answer:
-    """Answer a question. Baseline is plain RAG; Navigator arrives in milestone 5."""
+    """Answer one question without a conversation or streaming (used by the
+    evaluation runner). Baseline is plain RAG; Navigator runs the tool loop."""
     repo = await _searchable(session, repo_id)
     question = body.question.strip()
     if not question:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Question is empty")
-    if body.mode == "navigator":
-        raise HTTPException(
-            status.HTTP_501_NOT_IMPLEMENTED,
-            "Navigator mode is not built yet. Use baseline for now.",
-        )
     try:
-        return await answer_baseline(session, repo, question)
+        if body.mode == "baseline":
+            return await answer_baseline(session, repo, question)
+        async for event in navigate(session, repo, question):
+            if event.kind == "answer":
+                return event.data
     except (LLMUnavailable, SemanticUnavailable) as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except AgentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "No answer was produced")

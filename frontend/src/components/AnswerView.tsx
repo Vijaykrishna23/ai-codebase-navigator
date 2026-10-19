@@ -1,4 +1,4 @@
-import type { Answer, AnswerReference, Evidence } from "@/lib/api";
+import type { Answer, AnswerReference, Evidence, FlowNode, Step } from "@/lib/api";
 
 function snippet(ev: Evidence | undefined, start: number, end: number): string | null {
   if (!ev) return null;
@@ -54,6 +54,13 @@ export function AnswerView({ answer }: { answer: Answer }) {
         </ul>
       )}
 
+      {answer.flow.length > 0 && (
+        <section className="flex flex-col gap-1">
+          <h3 className="text-sm font-medium">Code flow</h3>
+          <Flow nodes={answer.flow} />
+        </section>
+      )}
+
       <References title="Code references" refs={answer.references} ledger={ledger} />
       <References title="Related tests" refs={answer.tests} ledger={ledger} />
 
@@ -68,15 +75,28 @@ export function AnswerView({ answer }: { answer: Answer }) {
         </div>
       )}
 
+      {answer.mode === "navigator" && answer.trace.length > 0 && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-neutral-500">
+            Investigation trace ({answer.trace.length} steps)
+          </summary>
+          <div className="mt-2">
+            <StepList steps={answer.trace} />
+          </div>
+        </details>
+      )}
+
       <details className="text-sm">
         <summary className="cursor-pointer text-neutral-500">
-          Retrieved context ({answer.evidence.length} chunks)
+          {answer.mode === "navigator"
+            ? `Cited evidence (${answer.evidence.length} of ${answer.evidence_total} gathered)`
+            : `Retrieved context (${answer.evidence.length} chunks)`}
         </summary>
         <ul className="mt-2 flex flex-col gap-1 font-mono text-xs">
           {answer.evidence.map((e) => (
             <li key={e.id} className="flex gap-2">
               <span className="w-8 text-neutral-500">{e.id}</span>
-              <span className="w-12 text-neutral-500">{e.score?.toFixed(3)}</span>
+              {e.score != null && <span className="w-12 text-neutral-500">{e.score.toFixed(3)}</span>}
               <a href={e.url} target="_blank" rel="noreferrer" className="truncate hover:underline">
                 {e.path}:{lines(e.start_line, e.end_line)}
                 {e.symbol && <span className="text-neutral-500"> {e.symbol}</span>}
@@ -87,8 +107,11 @@ export function AnswerView({ answer }: { answer: Answer }) {
       </details>
 
       <p className="text-xs text-neutral-500">
-        {answer.mode} · {answer.usage.model} · {answer.usage.input_tokens} in /{" "}
-        {answer.usage.output_tokens} out · {(answer.usage.latency_ms / 1000).toFixed(1)}s
+        {answer.mode} · {answer.usage.model} · {answer.usage.input_tokens} in
+        {answer.usage.cache_read_tokens > 0 && ` (+${answer.usage.cache_read_tokens} cached)`} /{" "}
+        {answer.usage.output_tokens} out
+        {answer.mode === "navigator" && ` · ${answer.usage.tool_calls} tool calls`} ·{" "}
+        {(answer.usage.latency_ms / 1000).toFixed(1)}s
       </p>
     </article>
   );
@@ -130,5 +153,41 @@ function References({
         );
       })}
     </section>
+  );
+}
+
+function Flow({ nodes }: { nodes: FlowNode[] }) {
+  return (
+    <ul className="flex flex-col gap-1 border-l border-neutral-200 pl-3 text-sm dark:border-neutral-800">
+      {nodes.map((n, i) => (
+        <li key={`${n.evidence}-${i}`} className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <a href={n.url} target="_blank" rel="noreferrer" className="font-mono text-xs hover:underline">
+              {n.symbol}
+            </a>
+            <span className="font-mono text-xs text-neutral-500">
+              {n.path}:{lines(n.start_line, n.end_line)}
+            </span>
+            {n.note && <span className="text-neutral-600 dark:text-neutral-400">{n.note}</span>}
+          </div>
+          {n.children.length > 0 && <Flow nodes={n.children} />}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function StepList({ steps }: { steps: Step[] }) {
+  if (steps.length === 0) return null;
+  return (
+    <ol className="flex flex-col gap-0.5 text-sm">
+      {steps.map((s) => (
+        <li key={s.index} className="flex flex-wrap gap-x-2">
+          <span className="w-5 text-right text-neutral-400">{s.index}</span>
+          <span className={s.error ? "text-red-600" : ""}>{s.label}</span>
+          {s.summary && <span className="text-neutral-500">{s.summary}</span>}
+        </li>
+      ))}
+    </ol>
   );
 }

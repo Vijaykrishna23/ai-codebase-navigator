@@ -2,7 +2,10 @@ from app.answer.schema import (
     AnswerReference,
     AnswerSentence,
     Evidence,
+    FlowNode,
     ModelAnswer,
+    ModelFlowStep,
+    ModelReference,
 )
 
 
@@ -25,9 +28,15 @@ def validate_answer(
             )
         )
 
+    return sentences, validate_references(model.references, ledger, url_for)
+
+
+def validate_references(
+    refs: list[ModelReference], ledger: dict[str, Evidence], url_for
+) -> list[AnswerReference]:
     references = []
     seen = set()
-    for r in model.references:
+    for r in refs:
         ev = ledger.get(r.evidence)
         if ev is None:
             continue
@@ -51,4 +60,51 @@ def validate_answer(
                 is_test=ev.is_test,
             )
         )
-    return sentences, references
+    return references
+
+
+def validate_flow(
+    steps: list[ModelFlowStep], ledger: dict[str, Evidence], url_for
+) -> list[FlowNode]:
+    """Build the call-flow tree from the model's flat list. Steps citing
+    unknown evidence are dropped and their children move up to the nearest
+    kept ancestor; cycles and unknown parents become roots."""
+    by_step = {s.step: s for s in steps}
+    nodes: dict[int, FlowNode] = {}
+    for s in steps:
+        ev = ledger.get(s.evidence)
+        if ev is None or s.step in nodes:
+            continue
+        nodes[s.step] = FlowNode(
+            symbol=s.symbol,
+            path=ev.path,
+            start_line=ev.start_line,
+            end_line=ev.end_line,
+            url=url_for(ev.path, ev.start_line, ev.end_line),
+            evidence=ev.id,
+            note=s.note,
+        )
+
+    def kept_parent(step: int) -> int | None:
+        seen = {step}
+        parent = by_step[step].parent
+        while parent in by_step and parent not in seen:
+            if parent in nodes:
+                return parent
+            seen.add(parent)
+            parent = by_step[parent].parent
+        return None
+
+    roots = []
+    for step, node in nodes.items():
+        parent = kept_parent(step)
+        # A parent that is also a descendant would make a cycle.
+        if parent is not None and not _descends(nodes[parent], node):
+            nodes[parent].children.append(node)
+        else:
+            roots.append(node)
+    return roots
+
+
+def _descends(node: FlowNode, ancestor: FlowNode) -> bool:
+    return any(c is node or _descends(node, c) for c in ancestor.children)

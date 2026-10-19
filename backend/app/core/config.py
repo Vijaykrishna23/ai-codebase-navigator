@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     rg_path: str = ""
     baseline_top_k: int = 12
 
+    agent_effort: str = "medium"
+    agent_max_tool_calls: int = 30
+    agent_max_input_tokens: int = 600_000
+
     max_source_files: int = 5000
     max_clone_mb: int = 200
     ingest_timeout_s: int = 900

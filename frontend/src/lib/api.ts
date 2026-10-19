@@ -201,6 +201,38 @@ export type AnswerReference = {
   is_test: boolean;
 };
 
+export type FlowNode = {
+  symbol: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  url: string;
+  evidence: string;
+  note: string;
+  children: FlowNode[];
+};
+
+export type Step = {
+  index: number;
+  tool: string;
+  input: Record<string, unknown>;
+  label: string;
+  summary: string;
+  evidence: string[];
+  error: boolean;
+  duration_ms: number;
+};
+
+export type Usage = {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  latency_ms: number;
+  cache_read_tokens: number;
+  tool_calls: number;
+  model_calls: number;
+};
+
 export type Answer = {
   mode: AskMode;
   question: string;
@@ -210,7 +242,10 @@ export type Answer = {
   tests: AnswerReference[];
   gaps: string[];
   evidence: Evidence[];
-  usage: { model: string; input_tokens: number; output_tokens: number; latency_ms: number };
+  usage: Usage;
+  flow: FlowNode[];
+  trace: Step[];
+  evidence_total: number;
 };
 
 export function ask(repoId: number, question: string, mode: AskMode): Promise<Answer> {
@@ -218,4 +253,90 @@ export function ask(repoId: number, question: string, mode: AskMode): Promise<An
     method: "POST",
     body: JSON.stringify({ question, mode }),
   });
+}
+
+export type Message = {
+  id: number;
+  mode: AskMode;
+  question: string;
+  status: "running" | "done" | "failed";
+  answer: Answer | null;
+  trace: Step[];
+  error: string | null;
+  created_at: string;
+};
+
+export type Conversation = {
+  id: number;
+  repo_id: number;
+  title: string | null;
+  created_at: string;
+  messages: Message[];
+};
+
+export function createConversation(repoId: number): Promise<Conversation> {
+  return request(`/api/repos/${repoId}/conversations`, { method: "POST" });
+}
+
+export function getConversation(id: number): Promise<Conversation> {
+  return request(`/api/conversations/${id}`);
+}
+
+export type StreamHandlers = {
+  onStep: (step: Step) => void;
+  onAnswer: (answer: Answer) => void;
+  onError: (message: string) => void;
+};
+
+// POST with a Server-Sent Events response, so EventSource (GET only) does not fit.
+export async function sendMessage(
+  conversationId: number,
+  question: string,
+  mode: AskMode,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ question, mode }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(typeof body?.detail === "string" ? body.detail : res.statusText, res.status);
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  let finished = false;
+  const dispatch = (block: string) => {
+    let event = "message";
+    const data: string[] = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) return;
+    const payload = JSON.parse(data.join("\n"));
+    if (event === "step") handlers.onStep(payload);
+    else if (event === "answer") {
+      finished = true;
+      handlers.onAnswer(payload);
+    } else if (event === "error") {
+      finished = true;
+      handlers.onError(payload.message);
+    }
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value.replace(/\r\n/g, "\n");
+    let cut;
+    while ((cut = buffer.indexOf("\n\n")) >= 0) {
+      dispatch(buffer.slice(0, cut));
+      buffer = buffer.slice(cut + 2);
+    }
+  }
+  if (buffer.trim()) dispatch(buffer);
+  if (!finished) handlers.onError("The connection closed before an answer arrived.");
 }
