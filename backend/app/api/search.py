@@ -1,3 +1,5 @@
+import logging
+import time
 from dataclasses import asdict
 from typing import Annotated, Literal
 
@@ -11,11 +13,14 @@ from app.agent.navigator import AgentError, navigate
 from app.answer.links import github_url
 from app.answer.schema import Answer
 from app.core.db import get_session
+from app.core.logging import preview
 from app.ingest.pipeline import clone_dir
 from app.models import Repo, RepoStatus
 from app.search.semantic import ChunkHit, SemanticUnavailable, semantic_search
 from app.search.symbols import SymbolHit, symbol_search
 from app.search.text import SearchError, TextMatch, text_search
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/repos/{repo_id}", tags=["search"])
 
@@ -86,6 +91,7 @@ async def search_text(
 ) -> TextSearchOut:
     """Exact or regex search over the checkout with ripgrep."""
     repo = await _searchable(session, repo_id)
+    t0 = time.monotonic()
     try:
         result = await text_search(
             clone_dir(repo.owner, repo.name, repo.sha),
@@ -98,7 +104,16 @@ async def search_text(
             limit=limit,
         )
     except SearchError as exc:
+        log.warning("Text search in repo %s failed: %s", repo_id, exc)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    log.info(
+        "Text search in repo %s for %r: %d matches%s in %d ms",
+        repo_id,
+        preview(q),
+        len(result.matches),
+        " (truncated)" if result.truncated else "",
+        (time.monotonic() - t0) * 1000,
+    )
 
     def out(m: TextMatch) -> TextMatchOut:
         return TextMatchOut(**asdict(m), url=github_url(repo, m.path, m.line))
@@ -124,9 +139,16 @@ async def search_symbols(
             **asdict(s), url=github_url(repo, s.path, s.start_line, s.end_line)
         )
 
-    return [
-        out(s) for s in await symbol_search(session, repo.id, q, kind=kind, limit=limit)
-    ]
+    t0 = time.monotonic()
+    hits = await symbol_search(session, repo.id, q, kind=kind, limit=limit)
+    log.info(
+        "Symbol search in repo %s for %r: %d hits in %d ms",
+        repo_id,
+        preview(q),
+        len(hits),
+        (time.monotonic() - t0) * 1000,
+    )
+    return [out(s) for s in hits]
 
 
 @router.get("/search/semantic")
@@ -138,9 +160,11 @@ async def search_semantic(
 ) -> list[ChunkOut]:
     """Embedding search over code chunks."""
     repo = await _searchable(session, repo_id)
+    t0 = time.monotonic()
     try:
         hits = await semantic_search(session, repo.id, q, k)
     except SemanticUnavailable as exc:
+        log.warning("Semantic search in repo %s unavailable: %s", repo_id, exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
     def out(h: ChunkHit) -> ChunkOut:
@@ -148,6 +172,13 @@ async def search_semantic(
             **asdict(h), url=github_url(repo, h.path, h.start_line, h.end_line)
         )
 
+    log.info(
+        "Semantic search in repo %s for %r: %d hits in %d ms",
+        repo_id,
+        preview(q),
+        len(hits),
+        (time.monotonic() - t0) * 1000,
+    )
     return [out(h) for h in hits]
 
 
@@ -164,6 +195,7 @@ async def ask(repo_id: int, body: AskIn, session: Session) -> Answer:
     question = body.question.strip()
     if not question:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Question is empty")
+    log.info("Ask (%s) in repo %s: %r", body.mode, repo_id, preview(question))
     try:
         if body.mode == "baseline":
             return await answer_baseline(session, repo, question)
@@ -171,7 +203,9 @@ async def ask(repo_id: int, body: AskIn, session: Session) -> Answer:
             if event.kind == "answer":
                 return event.data
     except (LLMUnavailable, SemanticUnavailable) as exc:
+        log.warning("Ask unavailable: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     except AgentError as exc:
+        log.warning("Ask failed: %s", exc)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "No answer was produced")

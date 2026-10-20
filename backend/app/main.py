@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -6,13 +7,26 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import conversations, health, intel, repos, search
 from app.core.config import get_settings
+from app.core.logging import setup_logging
 from app.ingest.pipeline import mark_interrupted
+
+setup_logging(get_settings().log_level)
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    log.info(
+        "Starting: model %s, embeddings %s, Claude key %s, Voyage key %s",
+        settings.llm_model,
+        settings.embedding_model,
+        "set" if settings.anthropic_api_key else "missing",
+        "set" if settings.voyage_api_key else "missing",
+    )
     await mark_interrupted()
     yield
+    log.info("Shutting down")
 
 
 app = FastAPI(title="AI Codebase Navigator", lifespan=lifespan)

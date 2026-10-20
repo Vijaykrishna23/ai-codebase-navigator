@@ -2,6 +2,7 @@
 evidence in a ledger and finishes with a structured, validated answer."""
 
 import json
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
@@ -30,8 +31,11 @@ from app.answer.validate import (
     validate_references,
 )
 from app.core.config import get_settings
+from app.core.logging import preview
 from app.ingest.pipeline import clone_dir
 from app.models import Repo
+
+log = logging.getLogger(__name__)
 
 MAX_TOKENS = 16000
 MAX_NUDGES = 2
@@ -257,6 +261,18 @@ def _build_answer(
         ),
     )
     answer.evidence = [entries[i] for i in _cited(answer) if i in entries]
+    log.info(
+        "Navigator answered in %.1fs: %d model calls, %d tool calls, "
+        "%d evidence cited of %d, %d in / %d out tokens (%d cache read)",
+        time.monotonic() - started,
+        usage.model_calls,
+        usage.tool_calls,
+        len(answer.evidence),
+        len(ledger),
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_read_tokens,
+    )
     return answer
 
 
@@ -354,9 +370,18 @@ async def navigate(
     exhausted = False
     last_text = ""
     max_model_calls = settings.agent_max_tool_calls + MAX_NUDGES + 4
+    log.info(
+        "Navigator started on %s/%s: %r (%d earlier turns, %d prior evidence)",
+        repo.owner,
+        repo.name,
+        preview(question),
+        len(history),
+        len(prior_evidence),
+    )
 
     while True:
         if usage.model_calls >= max_model_calls:
+            log.warning("Hit the %d model call cap, falling back", max_model_calls)
             yield Event(
                 "answer",
                 _build_answer(
@@ -364,6 +389,7 @@ async def navigate(
                 ),
             )
             return
+        t0 = time.monotonic()
         response = await llm.messages.create(
             model=settings.llm_model,
             max_tokens=MAX_TOKENS,
@@ -375,7 +401,20 @@ async def navigate(
             cache_control={"type": "ephemeral"},
         )
         usage.add(response)
+        log.info(
+            "Model call %d: stop %s, tools [%s], %d in / %d out tokens "
+            "(%d cache read, %d cache write), %d ms",
+            usage.model_calls,
+            response.stop_reason,
+            ", ".join(b.name for b in response.content if b.type == "tool_use"),
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            response.usage.cache_read_input_tokens or 0,
+            response.usage.cache_creation_input_tokens or 0,
+            (time.monotonic() - t0) * 1000,
+        )
         if response.stop_reason == "refusal":
+            log.warning("Model refused the question")
             raise AgentError("The model declined to answer this question.")
         # Thinking blocks go back unchanged, as the API requires with tool use.
         messages.append({"role": "assistant", "content": response.content})
@@ -392,6 +431,7 @@ async def navigate(
             except ValidationError as exc:
                 problem = f"Invalid answer: {exc.errors()[:3]}"
             if problem is not None:
+                log.warning("Rejected submit_answer: %s", preview(problem, 200))
                 if nudges >= MAX_NUDGES:
                     model = _trim_summary(model) if model else _fallback(last_text)
                 else:
@@ -420,6 +460,7 @@ async def navigate(
             return
 
         if not tool_uses:
+            log.warning("Model replied without a tool call (nudge %d)", nudges + 1)
             if nudges >= MAX_NUDGES:
                 yield Event(
                     "answer",
@@ -438,6 +479,7 @@ async def navigate(
             messages.append({"role": "user", "content": NUDGE})
             continue
 
+        was_exhausted = exhausted
         results: list[dict[str, Any]] = []
         for b in tool_uses:
             if exhausted or usage.tool_calls >= settings.agent_max_tool_calls:
@@ -466,6 +508,15 @@ async def navigate(
                 duration_ms=round((time.monotonic() - t0) * 1000),
             )
             trace.append(step)
+            (log.warning if out.error else log.info)(
+                "Tool %d %s: %s -> %s (%d evidence, %d ms)",
+                step.index,
+                b.name,
+                preview(step.label),
+                preview(step.summary),
+                len(step.evidence),
+                step.duration_ms,
+            )
             yield Event("step", step)
             result = {
                 "type": "tool_result",
@@ -480,5 +531,11 @@ async def navigate(
             exhausted = True
         if exhausted or usage.tool_calls >= settings.agent_max_tool_calls:
             exhausted = True
+            if not was_exhausted:
+                log.info(
+                    "Investigation budget used up (%d tool calls, %d input tokens)",
+                    usage.tool_calls,
+                    usage.total_input,
+                )
             results.append({"type": "text", "text": BUDGET_NOTE})
         messages.append({"role": "user", "content": results})

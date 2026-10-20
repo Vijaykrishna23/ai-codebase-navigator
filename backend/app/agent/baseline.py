@@ -1,3 +1,4 @@
+import logging
 import time
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,8 @@ from app.answer.validate import count_citations, validate_answer
 from app.core.config import get_settings
 from app.models import Repo
 from app.search.semantic import semantic_search
+
+log = logging.getLogger(__name__)
 
 MAX_TOKENS = 8000
 
@@ -70,6 +73,7 @@ async def answer_baseline(session: AsyncSession, repo: Repo, question: str) -> A
         )
         for i, h in enumerate(hits, start=1)
     ]
+    log.info("Baseline retrieved %d chunks, calling %s", len(hits), settings.llm_model)
 
     response = await llm.messages.parse(
         model=settings.llm_model,
@@ -82,6 +86,13 @@ async def answer_baseline(session: AsyncSession, repo: Repo, question: str) -> A
             }
         ],
         output_format=ModelAnswer,
+    )
+    log.info(
+        "Baseline answer: stop %s, %d in / %d out tokens, %d ms",
+        response.stop_reason,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        (time.monotonic() - started) * 1000,
     )
     if response.stop_reason == "refusal":
         raise RuntimeError("The model declined to answer this question.")

@@ -129,4 +129,5 @@ async def embed_repo(
                 await session.commit()
             embedded += len(batch)
             tokens += used
+            log.debug("Embedded batch of %d chunks, %d so far", len(batch), embedded)
             await on_progress(embedded, tokens)

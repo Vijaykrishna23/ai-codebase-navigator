@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, insert, select, text, update
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.core.logging import log_context
 from app.ingest.chunk import ParsedChunk, chunk_doc, chunk_source, is_doc_path
 from app.ingest.embed import embed_repo, get_embedder
 from app.ingest.github import (
@@ -73,7 +74,7 @@ async def cancel_ingest(repo_id: int) -> None:
 async def mark_interrupted() -> None:
     """Fail ingests a previous server process left half done."""
     async with SessionLocal() as session:
-        await session.execute(
+        result = await session.execute(
             update(Repo)
             .where(Repo.status.in_(RepoStatus.ACTIVE))
             .values(
@@ -82,6 +83,8 @@ async def mark_interrupted() -> None:
             )
         )
         await session.commit()
+    if result.rowcount:
+        log.warning("Marked %d interrupted ingest(s) as failed", result.rowcount)
     for tmp in repos_dir().glob(".tmp-*"):
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -94,18 +97,28 @@ async def _update(repo_id: int, **values: Any) -> None:
 
 async def _run(repo_id: int, job: Callable[[int], Awaitable[None]]) -> None:
     global _semaphore
+    log_context.set(f"repo {repo_id}")
     settings = get_settings()
     if _semaphore is None:
         _semaphore = asyncio.Semaphore(settings.max_concurrent_ingests)
+    if _semaphore.locked():
+        log.info("Waiting for a free ingest slot")
     async with _semaphore:
+        name = job.__name__.lstrip("_")
+        log.info("Job %s started", name)
+        started = time.monotonic()
         try:
             await asyncio.wait_for(job(repo_id), settings.ingest_timeout_s)
+            log.info("Job %s finished in %.1fs", name, time.monotonic() - started)
         except IngestError as exc:
+            log.warning("Job %s failed: %s", name, exc)
             await _fail(repo_id, str(exc))
         except TimeoutError:
             minutes = settings.ingest_timeout_s // 60
+            log.warning("Job %s timed out after %d minutes", name, minutes)
             await _fail(repo_id, f"Ingest took longer than {minutes} minutes.")
         except asyncio.CancelledError:
+            log.info("Job %s cancelled", name)
             raise
         except Exception as exc:
             log.exception("Ingest of repo %s failed", repo_id)
@@ -124,6 +137,7 @@ async def _ingest(repo_id: int) -> None:
     async with SessionLocal() as session:
         repo = await session.get(Repo, repo_id)
         if repo is None:
+            log.warning("Repo is gone, nothing to ingest")
             return
         ref = RepoRef(repo.owner, repo.name)
         old_sha = repo.sha
@@ -134,6 +148,7 @@ async def _ingest(repo_id: int) -> None:
         repo.stats = {}
         await session.commit()
 
+    log.info("Fetching GitHub metadata for %s/%s", ref.owner, ref.name)
     meta = await fetch_meta(ref)
     # GitHub reports full history size; a shallow clone is smaller, so only
     # reject far-too-big repos here and check the checkout precisely below.
@@ -144,8 +159,11 @@ async def _ingest(repo_id: int) -> None:
         )
 
     tmp = repos_dir() / f".tmp-{repo_id}"
+    log.info("Cloning %s/%s (branch %s)", ref.owner, ref.name, meta.default_branch)
+    t0 = time.monotonic()
     sha = await shallow_clone(ref, tmp, timeout=settings.ingest_timeout_s)
     clone_mb = await asyncio.to_thread(dir_size_mb, tmp)
+    log.info("Cloned %s, %.1f MB in %.1fs", sha[:12], clone_mb, time.monotonic() - t0)
     if clone_mb > settings.max_clone_mb:
         raise IngestError(
             f"Checkout is {clone_mb:.0f} MB, over the {settings.max_clone_mb} MB limit."
@@ -167,6 +185,7 @@ async def _ingest(repo_id: int) -> None:
         lambda: list(walk_repo(dest, settings.max_file_kb * 1024))
     )
     source_files = [f for f in files if f.language]
+    log.info("Walked %d files, %d of them source", len(files), len(source_files))
     if len(source_files) > settings.max_source_files:
         raise IngestError(
             f"Repository has {len(source_files)} Python, JavaScript and TypeScript "
@@ -188,6 +207,7 @@ async def _ingest(repo_id: int) -> None:
     await _update(repo_id, stats=stats)
 
     links: list[LinkFile] = []
+    t0 = time.monotonic()
     for start in range(0, len(files), BATCH_FILES):
         batch = files[start : start + BATCH_FILES]
         parsed = await asyncio.to_thread(_parse_batch, batch)
@@ -197,11 +217,21 @@ async def _ingest(repo_id: int) -> None:
         stats["parse_errors"] += n_errors
         stats["chunks"] += n_chunks
         await _update(repo_id, stats=dict(stats))
+        log.debug("Parsed %d/%d files", start + len(batch), len(files))
+    log.info(
+        "Parsed %d source files in %.1fs: %d symbols, %d chunks, %d parse errors",
+        stats["parsed"],
+        time.monotonic() - t0,
+        stats["symbols"],
+        stats["chunks"],
+        stats["parse_errors"],
+    )
 
     await _link_stage(repo_id, dest, links, [f.path for f in files], stats)
     await _embed_stage(repo_id, stats)
 
     stats["duration_s"] = round(time.monotonic() - started, 1)
+    log.info("Repo ready in %.1fs", stats["duration_s"])
     await _update(
         repo_id,
         status=RepoStatus.READY,
@@ -321,8 +351,10 @@ async def _link_stage(
     stats.update(linking="running", linking_note=None)
     await _update(repo_id, stats=dict(stats))
     started = time.monotonic()
+    log.info("Linking %d source files into the code graph", len(links))
     try:
         rows = await asyncio.to_thread(build_edges, repo_id, links, checkout, all_paths)
+        log.debug("Built %d edges, storing", len(rows))
         async with SessionLocal() as session:
             await session.execute(delete(Edge).where(Edge.repo_id == repo_id))
             for start in range(0, len(rows), BATCH_EDGES):
@@ -331,6 +363,12 @@ async def _link_stage(
         stats["edges"] = len(rows)
         stats["edge_kinds"] = dict(Counter(r["kind"] for r in rows).most_common())
         stats["linking"] = "done"
+        log.info(
+            "Linked %d edges in %.1fs: %s",
+            len(rows),
+            time.monotonic() - started,
+            ", ".join(f"{k} {n}" for k, n in stats["edge_kinds"].items()) or "none",
+        )
     except Exception as exc:
         log.exception("Linking repo %s failed", repo_id)
         stats["linking"] = "failed"
@@ -365,6 +403,7 @@ async def _relink(repo_id: int) -> None:
             )
         ).all()
     if not checkout.is_dir():
+        log.warning("Checkout %s is missing, cannot relink", checkout)
         stats["linking"] = "failed"
         stats["linking_note"] = "The checkout is missing. Re-index the repository."
         await _update(repo_id, stats=stats)
@@ -402,6 +441,7 @@ async def _embed_stage(repo_id: int, stats: dict[str, Any]) -> None:
     embeddings still works, and embedding can be retried later."""
     embedder = get_embedder()
     if embedder is None:
+        log.info("Embedding skipped: VOYAGE_API_KEY is not set")
         stats["embedding"] = "skipped"
         stats["embedding_note"] = (
             "VOYAGE_API_KEY is not set. Add it to .env, restart the backend, "
@@ -425,6 +465,8 @@ async def _embed_stage(repo_id: int, stats: dict[str, Any]) -> None:
     )
     await _update(repo_id, status=RepoStatus.EMBEDDING, stats=dict(stats))
     tokens_before = stats.get("embedding_tokens", 0)
+    log.info("Embedding chunks with %s (%d already embedded)", embedder.model, base)
+    started = time.monotonic()
 
     async def progress(done: int, tokens: int) -> None:
         stats["embedded"] = base + done
@@ -432,8 +474,14 @@ async def _embed_stage(repo_id: int, stats: dict[str, Any]) -> None:
         await _update(repo_id, stats=dict(stats))
 
     try:
-        await embed_repo(repo_id, embedder, progress)
+        done, tokens = await embed_repo(repo_id, embedder, progress)
         stats["embedding"] = "done"
+        log.info(
+            "Embedded %d chunks, %d tokens, in %.1fs",
+            done,
+            tokens,
+            time.monotonic() - started,
+        )
     except Exception as exc:
         log.exception("Embedding repo %s failed", repo_id)
         stats["embedding"] = "failed"
@@ -453,6 +501,7 @@ async def _embed_only(repo_id: int) -> None:
 
 
 async def delete_repo_data(repo: Repo) -> None:
+    log.info("Deleting data of repo %s (%s/%s)", repo.id, repo.owner, repo.name)
     await cancel_ingest(repo.id)
     if repo.sha:
         shutil.rmtree(clone_dir(repo.owner, repo.name, repo.sha), ignore_errors=True)

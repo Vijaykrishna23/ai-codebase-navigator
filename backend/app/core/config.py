@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     )
     cors_origins: list[str] = ["http://localhost:3000"]
     data_dir: Path = ROOT_DIR / "data"
+    log_level: str = "INFO"
 
     anthropic_api_key: str = ""
     llm_model: str = "claude-haiku-5-5"

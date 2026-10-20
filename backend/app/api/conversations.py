@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -19,6 +20,7 @@ from app.agent.navigator import AgentError, PriorTurn, navigate
 from app.answer.schema import Answer, Evidence, Step
 from app.api.search import _searchable
 from app.core.db import SessionLocal, get_session
+from app.core.logging import log_context, preview
 from app.models import Conversation, Message, MessageStatus, Repo
 from app.search.text import SearchError
 
@@ -154,6 +156,15 @@ async def run_turn(
         conv.title = question[:TITLE_CHARS]
     await session.commit()
     msg_id = msg.id
+    log_context.set(f"msg {msg_id}")
+    log.info(
+        "Turn started in conversation %s (%s, %d earlier turns): %r",
+        conv_id,
+        mode,
+        len(history),
+        preview(question),
+    )
+    started = time.monotonic()
     trace: list[Step] = []
     ledgers: list[Ledger] = []
     finished = False
@@ -169,6 +180,12 @@ async def run_turn(
                 setattr(row, k, v)
             row.trace = [st.model_dump() for st in trace]
             await s.commit()
+        log.info(
+            "Turn %s in %.1fs after %d steps",
+            fields.get("status", "?"),
+            time.monotonic() - started,
+            len(trace),
+        )
 
     try:
         if mode == "baseline":
@@ -213,6 +230,7 @@ async def run_turn(
                 yield "answer", event.data
                 return
     except (LLMUnavailable, SearchError, AgentError, RuntimeError) as exc:
+        log.warning("Turn failed: %s", exc)
         await finish(status=MessageStatus.FAILED, error=str(exc))
         yield "error", {"message": str(exc)}
     except APIError as exc:
@@ -228,6 +246,7 @@ async def run_turn(
     finally:
         if not finished:
             # The client went away mid-turn; record that in a fresh session.
+            log.info("Client disconnected after %d steps, turn stopped", len(trace))
             async with SessionLocal() as s:
                 row = await s.get(Message, msg_id)
                 if row is not None and row.status == MessageStatus.RUNNING:
@@ -254,6 +273,7 @@ async def post_message(
         async with SessionLocal() as s:
             repo = await s.get(Repo, repo_id)
             async for kind, data in run_turn(s, repo, cid, question, body.mode):
+                log.debug("SSE %s event", kind)
                 yield _sse(kind, data)
 
     return StreamingResponse(
